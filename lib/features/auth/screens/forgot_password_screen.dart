@@ -1,16 +1,16 @@
 import 'package:flutter/material.dart';
 import '../../../core/constants/app_colors.dart';
-import '../../../core/services/user_session.dart';
-import '../../../core/services/driver_session.dart';
+import '../../../core/network/api_exception.dart';
+import '../../../core/services/auth_api.dart';
 import '../../../core/utils/phone_utils.dart';
 import 'otp_verification_screen.dart';
 
 class ForgotPasswordScreen extends StatefulWidget {
   const ForgotPasswordScreen({super.key, this.isDriver = false});
 
-  /// Whether this flow is resetting a driver account (checked against
-  /// [DriverSession]) instead of a commuter account (checked against
-  /// [UserSession]).
+  /// Whether this flow is resetting a driver account instead of a
+  /// commuter account — determines which backend route gets called
+  /// (`/auth/driver/...` vs `/auth/commuter/...`, see AuthApi).
   final bool isDriver;
 
   @override
@@ -55,52 +55,43 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       _isLoading = true;
     });
 
-    // Simulate sending OTP
-    await Future.delayed(const Duration(seconds: 1));
-
-    if (!mounted) return;
-
-    // Make sure we're checking against whatever account is actually
-    // persisted on disk, not stale in-memory fields.
-    if (widget.isDriver) {
-      await DriverSession.instance.loadFromPrefs();
-    } else {
-      await UserSession.instance.loadFromPrefs();
-    }
-
     final normalizedPhone = PhoneUtils.toE164(_phoneController.text.trim());
 
-    final isRegistered = widget.isDriver
-        ? DriverSession.instance.isRegistered(normalizedPhone)
-        : UserSession.instance.isRegistered(normalizedPhone);
+    try {
+      await AuthApi.forgotPassword(
+        isDriver: widget.isDriver,
+        mobileNumber: normalizedPhone,
+      );
 
-    if (!isRegistered) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+      });
+
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => OtpVerificationScreen(
+            mobileNumber: normalizedPhone,
+            isDriver: widget.isDriver,
+          ),
+        ),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'This number is not registered. Please sign up first.',
+            e.code == 'not_found'
+                ? 'This number is not registered. Please sign up first.'
+                : e.message,
           ),
         ),
       );
-      return;
     }
-
-    setState(() {
-      _isLoading = false;
-    });
-
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => OtpVerificationScreen(
-          mobileNumber: normalizedPhone,
-          isDriver: widget.isDriver,
-        ),
-      ),
-    );
   }
 
   InputDecoration _fieldDecoration({String? hintText}) {

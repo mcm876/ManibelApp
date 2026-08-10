@@ -25,7 +25,6 @@ function toPublicCommuter(commuter: {
   mobileNumber: string;
   dateOfBirth: Date | null;
   photoUrl: string | null;
-  verified: boolean;
 }) {
   return {
     commuterId: commuter.commuterId,
@@ -33,16 +32,16 @@ function toPublicCommuter(commuter: {
     mobileNumber: commuter.mobileNumber,
     dateOfBirth: commuter.dateOfBirth,
     photoUrl: commuter.photoUrl,
-    verified: commuter.verified,
   };
 }
 
 export const authCommuterRouter = Router();
 
 /**
- * Creates the account up front (unverified) and sends a signup OTP, mirroring
- * the client flow: signup screen -> OTP verification screen -> verified screen.
- * The account only becomes usable for login once /verify-otp succeeds.
+ * No phone-OTP gate here — in the client, the screen right after signup is
+ * CommuterVerificationScreen (government ID + face verification), not an
+ * OTP entry screen. So the account is usable immediately and this returns
+ * a session token straight away, same as /login.
  */
 authCommuterRouter.post(
   '/signup',
@@ -62,7 +61,7 @@ authCommuterRouter.post(
 
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
-    await prisma.commuter.create({
+    const commuter = await prisma.commuter.create({
       data: {
         commuterId: generateCommuterId(),
         fullName,
@@ -72,36 +71,8 @@ authCommuterRouter.post(
       },
     });
 
-    await issueOtp(mobileNumber, 'SIGNUP');
-
-    res.status(201).json({ mobileNumber, message: 'Account created. Enter the OTP sent to your mobile number.' });
-  }),
-);
-
-authCommuterRouter.post(
-  '/verify-otp',
-  validateBody(verifyOtpSchema),
-  asyncHandler(async (req, res) => {
-    const mobileNumber = toE164((req.body as { mobileNumber: string }).mobileNumber);
-    const { code } = req.body as { code: string };
-
-    const commuter = await prisma.commuter.findUnique({ where: { mobileNumber } });
-    if (!commuter) {
-      throw new ApiError(404, 'not_found', 'No account for this mobile number');
-    }
-
-    const ok = await verifyOtp(mobileNumber, 'SIGNUP', code);
-    if (!ok) {
-      throw new ApiError(400, 'invalid_otp', 'That code is invalid or expired');
-    }
-
-    const updated = await prisma.commuter.update({
-      where: { id: commuter.id },
-      data: { verified: true },
-    });
-
-    const token = signAuthToken({ sub: updated.id, role: 'commuter' });
-    res.json({ token, commuter: toPublicCommuter(updated) });
+    const token = signAuthToken({ sub: commuter.id, role: 'commuter' });
+    res.status(201).json({ token, commuter: toPublicCommuter(commuter) });
   }),
 );
 
@@ -115,9 +86,6 @@ authCommuterRouter.post(
     const commuter = await prisma.commuter.findUnique({ where: { mobileNumber } });
     if (!commuter || !(await bcrypt.compare(password, commuter.passwordHash))) {
       throw new ApiError(401, 'invalid_credentials', 'Incorrect mobile number or password');
-    }
-    if (!commuter.verified) {
-      throw new ApiError(403, 'not_verified', 'Verify your mobile number before logging in');
     }
 
     const token = signAuthToken({ sub: commuter.id, role: 'commuter' });

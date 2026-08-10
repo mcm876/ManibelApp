@@ -2,13 +2,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// Session store for the logged-in commuter.
 ///
-/// There's still no backend — this now persists to on-device storage via
-/// shared_preferences so a signed-up user's data survives closing and
-/// reopening the app, instead of vanishing whenever the process dies.
-/// When a real backend/auth service exists, replace the bodies of these
-/// methods with actual API calls, swap plaintext `password` for a proper
-/// token-based session, and consider moving off a raw singleton onto
-/// Provider/Riverpod/Bloc so widgets can listen for changes instead of
+/// Signup/login now go through the backend (see AuthApi) — this class
+/// persists whatever that API returns (plus the JWT) to on-device storage
+/// via shared_preferences, so it survives closing and reopening the app.
+/// Profile edits (SettingsScreen) and change-password are still local-only
+/// mocks pending their own endpoints. Consider moving off a raw singleton
+/// onto Provider/Riverpod/Bloc so widgets can listen for changes instead of
 /// reading a static field once at build time.
 class UserSession {
   UserSession._internal();
@@ -30,10 +29,15 @@ class UserSession {
   /// should probably become an uploaded photo URL instead.
   String? photoPath;
 
-  // TODO: NEVER keep plaintext passwords once a backend exists. This only
-  // exists so login/change-password have something to check against while
-  // everything is still mocked locally.
+  // Kept for ChangePasswordScreen's local "current password" check, which
+  // still runs entirely against this session rather than the backend (no
+  // change-password endpoint exists yet). NOT used for login anymore — see
+  // [token].
   String? password;
+
+  /// JWT returned by the backend on signup/login (see AuthApi). Send this
+  /// as `Authorization: Bearer $token` on any authenticated request.
+  String? token;
 
   static const _kFullName = 'session_fullName';
   static const _kMobileNumber = 'session_mobileNumber';
@@ -41,6 +45,7 @@ class UserSession {
   static const _kCommuterId = 'session_commuterId';
   static const _kDateOfBirth = 'session_dateOfBirth';
   static const _kPhotoPath = 'session_photoPath';
+  static const _kToken = 'session_token';
   static const _kLoggedInFlag = 'commuterLoggedIn';
 
   bool get isSignedIn => fullName != null;
@@ -56,6 +61,7 @@ class UserSession {
     password = prefs.getString(_kPassword);
     commuterId = prefs.getString(_kCommuterId);
     photoPath = prefs.getString(_kPhotoPath);
+    token = prefs.getString(_kToken);
     final dobIso = prefs.getString(_kDateOfBirth);
     dateOfBirth = dobIso != null ? DateTime.tryParse(dobIso) : null;
   }
@@ -78,61 +84,55 @@ class UserSession {
     } else {
       await prefs.remove(_kDateOfBirth);
     }
+    if (token != null) {
+      await prefs.setString(_kToken, token!);
+    } else {
+      await prefs.remove(_kToken);
+    }
   }
 
   /// Called after a successful sign-up. [mobileNumber] should already be
   /// normalized to `+63XXXXXXXXXX` (PhoneUtils.toE164).
   ///
-  /// This always starts the account with no profile photo and a fresh
-  /// commuter ID — a device's previous account (whoever was signed up
-  /// before) must never leak its photo/ID into a brand-new signup.
+  /// This always starts the account with no profile photo — a device's
+  /// previous account (whoever was signed up before) must never leak its
+  /// photo into a brand-new signup. [commuterId] should come from the
+  /// backend's signup response (AuthApi.commuterSignUp); a local ID is
+  /// only generated as a fallback if none is given.
   Future<void> signUp({
     required String fullName,
     required String mobileNumber,
     required String password,
+    String? commuterId,
+    String? token,
   }) async {
     this.fullName = fullName;
     this.mobileNumber = mobileNumber;
     this.password = password;
     photoPath = null;
-    commuterId = _generateCommuterId();
+    this.commuterId = commuterId ?? _generateCommuterId();
+    if (token != null) this.token = token;
     await _persist();
   }
 
-  /// Whether [mobileNumber] (already normalized to `+63XXXXXXXXXX`) matches
-  /// the account currently on file. Since this app only stores one local
-  /// account, this is really "does *any* registered account match" — use
-  /// it to show "this number isn't registered" before even checking the
-  /// password, so that error doesn't get conflated with "wrong password".
-  bool isRegistered(String mobileNumber) {
-    return this.mobileNumber != null && this.mobileNumber == mobileNumber;
-  }
-
-  /// Checks a login attempt against whatever account is on file.
-  /// [mobileNumber] should already be normalized to `+63XXXXXXXXXX`.
-  /// Returns false if there's no account stored at all (nobody has signed
-  /// up locally yet) or if either value doesn't match.
-  bool verifyCredentials({
-    required String mobileNumber,
-    required String password,
-  }) {
-    if (this.mobileNumber == null || this.password == null) return false;
-    return this.mobileNumber == mobileNumber && this.password == password;
-  }
-
-  /// Called after a successful login. Assumes [loadFromPrefs] has already
-  /// populated the account being logged into (or that [verifyCredentials]
-  /// was checked first) — this mainly exists to explicitly mark who's
-  /// currently signed in.
+  /// Called after a successful login against the backend
+  /// (AuthApi.commuterLogIn). [fullName]/[commuterId]/[dateOfBirth] should
+  /// come from that response so the session reflects the server's record
+  /// rather than stale local data.
   Future<void> logIn({
     required String mobileNumber,
     String? fullName,
     String? password,
+    String? commuterId,
+    String? token,
+    DateTime? dateOfBirth,
   }) async {
     this.mobileNumber = mobileNumber;
     if (fullName != null) this.fullName = fullName;
     if (password != null) this.password = password;
-    commuterId ??= _generateCommuterId();
+    if (dateOfBirth != null) this.dateOfBirth = dateOfBirth;
+    this.commuterId = commuterId ?? this.commuterId ?? _generateCommuterId();
+    if (token != null) this.token = token;
     await _persist();
   }
 
@@ -169,33 +169,13 @@ class UserSession {
     return true;
   }
 
-  /// Ends the current session WITHOUT deleting the account. This app has
-  /// no backend yet, so the SharedPreferences copy of fullName/
-  /// mobileNumber/password/commuterId *is* the account record — wiping it
-  /// here would mean the next login has nothing left to verify against,
-  /// even with the correct credentials.
-  ///
-  /// Only the in-memory fields (so `isSignedIn` flips to false right away)
-  /// and the "logged in" flag get cleared. The persisted account data
-  /// stays on disk so [loadFromPrefs] can find it again next time someone
-  /// logs back in.
-  /// Called from the forgot-password flow after OTP verification. Unlike
-  /// [updatePassword], this doesn't require the current password — OTP
-  /// verification is what proves ownership of the account here instead.
-  /// Returns false if [mobileNumber] doesn't match the account on file, so
-  /// the caller can show an error instead of silently doing nothing.
-  Future<bool> resetPassword({
-    required String mobileNumber,
-    required String newPassword,
-  }) async {
-    if (this.mobileNumber == null || this.mobileNumber != mobileNumber) {
-      return false;
-    }
-    password = newPassword;
-    await _persist();
-    return true;
-  }
-
+  /// Ends the current session WITHOUT deleting the account. The persisted
+  /// profile fields stay on disk (SharedPreferences) so [loadFromPrefs] can
+  /// find them again next time someone logs back in — only the in-memory
+  /// fields (so `isSignedIn` flips to false right away) and the "logged
+  /// in" flag get cleared. Actual credential verification now lives on the
+  /// backend, not here, so there's nothing to preserve for a later local
+  /// login check.
   Future<void> signOut() async {
     fullName = null;
     mobileNumber = null;
@@ -203,6 +183,7 @@ class UserSession {
     password = null;
     commuterId = null;
     photoPath = null;
+    token = null;
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kLoggedInFlag, false);

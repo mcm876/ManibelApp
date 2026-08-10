@@ -2,9 +2,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// Session store for the logged-in driver. Mirrors [UserSession] (the
 /// commuter equivalent) but keeps its own prefs keys/prefix so a driver
-/// account never collides with a commuter account on the same device —
-/// there's still no backend, so this is the source of truth for "is anyone
-/// signed in as a driver right now".
+/// account never collides with a commuter account on the same device.
+/// Login goes through the backend (see AuthApi.driverLogIn) — drivers don't
+/// self-register in the app; accounts are provisioned out-of-band (see
+/// backend/prisma/seed.ts for the local demo account).
 class DriverSession {
   DriverSession._internal();
 
@@ -29,10 +30,15 @@ class DriverSession {
   /// should probably become an uploaded photo URL instead.
   String? photoPath;
 
-  // TODO: NEVER keep plaintext passwords once a backend exists. This only
-  // exists so driver login has something to check against while everything
-  // is still mocked locally.
+  // Kept for DriverChangePasswordScreen's local "current password" check,
+  // which still runs entirely against this session rather than the backend
+  // (no change-password endpoint exists yet). NOT used for login anymore —
+  // see [token].
   String? password;
+
+  /// JWT returned by the backend on login (see AuthApi). Send this as
+  /// `Authorization: Bearer $token` on any authenticated request.
+  String? token;
 
   static const _kFullName = 'driver_session_fullName';
   static const _kMobileNumber = 'driver_session_mobileNumber';
@@ -40,6 +46,7 @@ class DriverSession {
   static const _kDriverId = 'driver_session_driverId';
   static const _kPlateNumber = 'driver_session_plateNumber';
   static const _kPhotoPath = 'driver_session_photoPath';
+  static const _kToken = 'driver_session_token';
   static const _kLoggedInFlag = 'driverLoggedIn';
 
   bool get isSignedIn => fullName != null;
@@ -55,20 +62,7 @@ class DriverSession {
     driverId = prefs.getString(_kDriverId);
     plateNumber = prefs.getString(_kPlateNumber);
     photoPath = prefs.getString(_kPhotoPath);
-  }
-
-  /// Drivers don't self-register in the app — an operator/admin creates
-  /// their account for them. Since there's no admin backend yet, this
-  /// stands in for that: it seeds one demo driver account (once) so the
-  /// login screen has something real to authenticate against. Call this
-  /// after [loadFromPrefs]; it's a no-op once any account is on file.
-  Future<void> ensureDemoAccountSeeded() async {
-    if (mobileNumber != null) return;
-    await signUp(
-      fullName: 'Juan Dela Cruz',
-      mobileNumber: '+639171234567',
-      password: 'Driver@123',
-    );
+    token = prefs.getString(_kToken);
   }
 
   Future<void> _persist() async {
@@ -85,26 +79,11 @@ class DriverSession {
     } else {
       await prefs.remove(_kPhotoPath);
     }
-  }
-
-  /// Called after a successful sign-up. [mobileNumber] should already be
-  /// normalized to `+63XXXXXXXXXX` (PhoneUtils.toE164).
-  ///
-  /// Always starts the account with a fresh driver ID and no photo — a
-  /// device's previous driver account must never leak its ID/photo into a
-  /// brand-new signup.
-  Future<void> signUp({
-    required String fullName,
-    required String mobileNumber,
-    required String password,
-  }) async {
-    this.fullName = fullName;
-    this.mobileNumber = mobileNumber;
-    this.password = password;
-    photoPath = null;
-    driverId = _generateDriverId();
-    plateNumber ??= _generatePlateNumber();
-    await _persist();
+    if (token != null) {
+      await prefs.setString(_kToken, token!);
+    } else {
+      await prefs.remove(_kToken);
+    }
   }
 
   /// Called from DriverSettingsScreen when the driver saves profile
@@ -139,57 +118,32 @@ class DriverSession {
     return true;
   }
 
-  /// Whether [mobileNumber] (already normalized to `+63XXXXXXXXXX`) matches
-  /// the account currently on file. Since this app only stores one local
-  /// driver account, this is really "does *any* registered account match".
-  bool isRegistered(String mobileNumber) {
-    return this.mobileNumber != null && this.mobileNumber == mobileNumber;
-  }
-
-  /// Called from the forgot-password flow after OTP verification. Unlike
-  /// [updatePassword], this doesn't require the current password — OTP
-  /// verification is what proves ownership of the account here instead.
-  /// Returns false if [mobileNumber] doesn't match the account on file, so
-  /// the caller can show an error instead of silently doing nothing.
-  Future<bool> resetPassword({
+  /// Called after a successful login against the backend
+  /// (AuthApi.driverLogIn). [fullName]/[driverId]/[plateNumber] should come
+  /// from that response so the session reflects the server's record rather
+  /// than stale or invented local data.
+  Future<void> logIn({
     required String mobileNumber,
-    required String newPassword,
+    String? fullName,
+    String? driverId,
+    String? plateNumber,
+    String? token,
   }) async {
-    if (this.mobileNumber == null || this.mobileNumber != mobileNumber) {
-      return false;
-    }
-    password = newPassword;
-    await _persist();
-    return true;
-  }
-
-  /// Checks a login attempt against whatever account is on file.
-  /// [mobileNumber] should already be normalized to `+63XXXXXXXXXX`.
-  bool verifyCredentials({
-    required String mobileNumber,
-    required String password,
-  }) {
-    if (this.mobileNumber == null || this.password == null) return false;
-    return this.mobileNumber == mobileNumber && this.password == password;
-  }
-
-  /// Called after a successful login. Assumes [loadFromPrefs] has already
-  /// populated the account being logged into (or that [verifyCredentials]
-  /// was checked first).
-  Future<void> logIn({required String mobileNumber}) async {
     this.mobileNumber = mobileNumber;
-    driverId ??= _generateDriverId();
-    plateNumber ??= _generatePlateNumber();
+    if (fullName != null) this.fullName = fullName;
+    this.driverId = driverId ?? this.driverId ?? _generateDriverId();
+    this.plateNumber = plateNumber ?? this.plateNumber ?? _generatePlateNumber();
+    if (token != null) this.token = token;
     await _persist();
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kLoggedInFlag, true);
   }
 
-  /// Ends the current session WITHOUT deleting the account, so the next
-  /// login has something to verify against. Only the in-memory fields (so
-  /// [isSignedIn] flips to false right away) and the "logged in" flag get
-  /// cleared.
+  /// Ends the current session WITHOUT deleting the account. Only the
+  /// in-memory fields (so [isSignedIn] flips to false right away) and the
+  /// "logged in" flag get cleared — credential verification lives on the
+  /// backend now, not here.
   Future<void> signOut() async {
     fullName = null;
     mobileNumber = null;
@@ -197,6 +151,7 @@ class DriverSession {
     driverId = null;
     plateNumber = null;
     photoPath = null;
+    token = null;
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kLoggedInFlag, false);

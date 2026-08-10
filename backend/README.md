@@ -71,9 +71,8 @@ All bodies are JSON. Mobile numbers accept either `09XXXXXXXXX` or
 
 | Method | Path                | Body                                              | Notes |
 |--------|---------------------|----------------------------------------------------|-------|
-| POST   | `/signup`           | `fullName, mobileNumber, password, dateOfBirth?`   | Creates an unverified account, sends a signup OTP |
-| POST   | `/verify-otp`       | `mobileNumber, code`                               | Marks verified, returns `{ token, commuter }` |
-| POST   | `/login`            | `mobileNumber, password`                           | Fails with `not_verified` if signup OTP was never confirmed |
+| POST   | `/signup`           | `fullName, mobileNumber, password, dateOfBirth?`   | No phone-OTP gate — returns `{ token, commuter }` immediately. In the client, the screen right after signup is ID + face verification (KYC), not an OTP screen, so there's nothing to gate login on here. |
+| POST   | `/login`            | `mobileNumber, password`                           | Returns `{ token, commuter }` |
 | POST   | `/forgot-password`  | `mobileNumber`                                     | Sends a password-reset OTP |
 | POST   | `/verify-reset-otp` | `mobileNumber, code`                               | Returns a short-lived `{ resetToken }` (10 min) |
 | POST   | `/reset-password`   | `resetToken, newPassword`                          | |
@@ -100,24 +99,19 @@ spaces, upper+lower+digit+special char`) — re-checked server-side in
 
 ### OTP in local dev
 
-There's no SMS gateway wired up. Every OTP is printed to the server
-console instead (`[OTP] SIGNUP code for +639...: 123456 ...`) — read it from
-there while testing.
+There's no SMS gateway wired up. Every password-reset OTP is printed to
+the server console instead (`[OTP] PASSWORD_RESET code for +639...: 123456
+...`) — read it from there while testing the forgot-password flow.
 
 ## Trying it end-to-end
 
 ```sh
-# 1. Sign up
+# 1. Sign up (already logged in — no OTP step)
 curl -X POST http://localhost:4000/auth/commuter/signup \
   -H "Content-Type: application/json" \
   -d '{"fullName":"Test User","mobileNumber":"09171234567","password":"Str0ng!Pass"}'
 
-# 2. Read the OTP from the server console, then verify
-curl -X POST http://localhost:4000/auth/commuter/verify-otp \
-  -H "Content-Type: application/json" \
-  -d '{"mobileNumber":"09171234567","code":"123456"}'
-
-# 3. Log in
+# 2. Log in
 curl -X POST http://localhost:4000/auth/commuter/login \
   -H "Content-Type: application/json" \
   -d '{"mobileNumber":"09171234567","password":"Str0ng!Pass"}'
@@ -125,9 +119,14 @@ curl -X POST http://localhost:4000/auth/commuter/login \
 
 ## Connecting the Flutter app
 
-The app currently authenticates entirely against on-device
-`shared_preferences` (`lib/core/services/user_session.dart` and
-`driver_session.dart` — see the TODOs in both). Pointing the app at this
-API means replacing those methods' bodies with HTTP calls to the endpoints
-above and swapping the stored plaintext password for the JWT this API
-returns. Not done yet — this backend is just the server side so far.
+Wired up — see `lib/core/network/api_client.dart` and
+`lib/core/services/auth_api.dart`, called from the signup/login/forgot-password/
+OTP/reset-password screens under `lib/features/auth/screens/`. `UserSession`
+and `DriverSession` (`lib/core/services/`) now hold the JWT this API returns
+alongside the profile fields they already tracked.
+
+By default the app points at `http://localhost:4000` (or `10.0.2.2:4000` on
+an Android emulator, which is that OS's alias for the host machine). Running
+on a physical device requires pointing it at your dev machine's LAN IP
+instead — set `ApiClient.baseUrlOverride` (`lib/core/network/api_client.dart`)
+before the first request.

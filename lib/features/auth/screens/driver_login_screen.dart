@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/constants/app_colors.dart';
+import '../../../core/network/api_exception.dart';
+import '../../../core/services/auth_api.dart';
 import '../../../core/services/driver_operations_log.dart';
 import '../../../core/services/driver_session.dart';
 import '../../../core/utils/phone_utils.dart';
@@ -79,77 +81,18 @@ class _DriverLoginScreenState extends State<DriverLoginScreen> {
       _isLoading = true;
     });
 
+    final normalizedPhone = PhoneUtils.toE164(_phoneController.text.trim());
+
     try {
       // ---------------------------------------------------------------------
-      // LOAD SAVED DRIVER SESSION
+      // CALL THE BACKEND
       // ---------------------------------------------------------------------
 
-      await DriverSession.instance.loadFromPrefs();
-
-      // ---------------------------------------------------------------------
-      // DEMO ACCOUNT
-      // ---------------------------------------------------------------------
-
-      await DriverSession.instance.ensureDemoAccountSeeded();
-
-      // ---------------------------------------------------------------------
-      // NORMALIZE PHONE NUMBER
-      // ---------------------------------------------------------------------
-
-      final normalizedPhone = PhoneUtils.toE164(
-        _phoneController.text.trim(),
-      );
-
-      // ---------------------------------------------------------------------
-      // CHECK REGISTERED DRIVER
-      // ---------------------------------------------------------------------
-
-      if (!DriverSession.instance.isRegistered(normalizedPhone)) {
-        if (!mounted) return;
-
-        setState(() {
-          _isLoading = false;
-        });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              "This number isn't registered. "
-              "Contact your operator to get a driver account.",
-            ),
-          ),
-        );
-
-        return;
-      }
-
-      // ---------------------------------------------------------------------
-      // VERIFY PASSWORD
-      // ---------------------------------------------------------------------
-
-      final credentialsValid =
-          DriverSession.instance.verifyCredentials(
+      final result = await AuthApi.driverLogIn(
         mobileNumber: normalizedPhone,
         password: _passwordController.text,
       );
-
-      if (!credentialsValid) {
-        if (!mounted) return;
-
-        setState(() {
-          _isLoading = false;
-        });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Incorrect mobile number or password.',
-            ),
-          ),
-        );
-
-        return;
-      }
+      final profile = result.profile;
 
       // ---------------------------------------------------------------------
       // SAVE DRIVER LOGIN
@@ -157,6 +100,10 @@ class _DriverLoginScreenState extends State<DriverLoginScreen> {
 
       await DriverSession.instance.logIn(
         mobileNumber: normalizedPhone,
+        fullName: profile['fullName'] as String?,
+        driverId: profile['driverId'] as String?,
+        plateNumber: profile['plateNumber'] as String?,
+        token: result.token,
       );
 
       // ---------------------------------------------------------------------
@@ -184,7 +131,7 @@ class _DriverLoginScreenState extends State<DriverLoginScreen> {
         ),
         (route) => false,
       );
-    } catch (e) {
+    } on ApiException catch (e) {
       if (!mounted) return;
 
       setState(() {
@@ -194,7 +141,9 @@ class _DriverLoginScreenState extends State<DriverLoginScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Login failed. Please try again.\n$e',
+            e.code == 'invalid_credentials'
+                ? 'Incorrect mobile number or password.'
+                : e.message,
           ),
         ),
       );
@@ -562,7 +511,7 @@ class _DriverLoginScreenState extends State<DriverLoginScreen> {
 
                     child: const Text(
                       'Demo driver account\n'
-                      '09926017890 · Arklo05.',
+                      '+639171234567 · Driver@123',
 
                       textAlign: TextAlign.center,
 

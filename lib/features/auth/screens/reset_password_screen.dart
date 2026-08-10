@@ -1,24 +1,24 @@
 import 'package:flutter/material.dart';
 import '../../../core/constants/app_colors.dart';
-import '../../../core/services/user_session.dart';
-import '../../../core/services/driver_session.dart';
+import '../../../core/network/api_exception.dart';
+import '../../../core/services/auth_api.dart';
 import 'password_reset_success_screen.dart';
 
 class ResetPasswordScreen extends StatefulWidget {
   const ResetPasswordScreen({
     super.key,
-    required this.mobileNumber,
+    required this.resetToken,
     this.isDriver = false,
   });
 
-  /// Already normalized to `+63XXXXXXXXXX` — identifies which account's
-  /// password gets updated. Passed down from ForgotPasswordScreen through
-  /// OtpVerificationScreen.
-  final String mobileNumber;
+  /// Short-lived token proving OTP ownership, returned by
+  /// AuthApi.verifyResetOtp — this is what actually authorizes the
+  /// password change server-side, not the OTP code itself.
+  final String resetToken;
 
-  /// Whether this flow is resetting a driver account (updates
-  /// [DriverSession]) instead of a commuter account (updates
-  /// [UserSession]).
+  /// Whether this flow is resetting a driver account instead of a
+  /// commuter account — determines which API route gets called and where
+  /// PasswordResetSuccessScreen routes back to.
   final bool isDriver;
 
   @override
@@ -93,55 +93,40 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
       _isLoading = true;
     });
 
-    // TODO: Replace with your API call once a backend exists.
-    await Future.delayed(const Duration(seconds: 1));
+    try {
+      await AuthApi.resetPassword(
+        isDriver: widget.isDriver,
+        resetToken: widget.resetToken,
+        newPassword: _passwordController.text,
+      );
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    // Make sure we're updating whatever's actually persisted, not stale
-    // in-memory fields from earlier in the app's lifetime.
-    if (widget.isDriver) {
-      await DriverSession.instance.loadFromPrefs();
-    } else {
-      await UserSession.instance.loadFromPrefs();
-    }
+      setState(() {
+        _isLoading = false;
+      });
 
-    final success = widget.isDriver
-        ? await DriverSession.instance.resetPassword(
-            mobileNumber: widget.mobileNumber,
-            newPassword: _passwordController.text,
-          )
-        : await UserSession.instance.resetPassword(
-            mobileNumber: widget.mobileNumber,
-            newPassword: _passwordController.text,
-          );
-
-    if (!mounted) return;
-
-    if (!success) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => PasswordResetSuccessScreen(isDriver: widget.isDriver),
+        ),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'Something went wrong updating your password. Please try again.',
+            e.code == 'invalid_reset_token'
+                ? 'This reset code has expired. Please request a new one.'
+                : e.message,
           ),
         ),
       );
-      return;
     }
-
-    setState(() {
-      _isLoading = false;
-    });
-
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (_) => PasswordResetSuccessScreen(isDriver: widget.isDriver),
-      ),
-    );
   }
 
   InputDecoration _inputDecoration({
