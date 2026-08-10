@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: manibelapp-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: manibelapp
+      POSTGRES_PASSWORD: manibelapp
+      POSTGRES_DB: manibelapp
+    ports:
+      - "5432:5432"
+    volumes:
+      - manibelapp_pgdata:/var/lib/postgresql/data
+
+volumes:
+  manibelapp_pgdata:

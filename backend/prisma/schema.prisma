@@ -1,0 +1,50 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum OtpPurpose {
+  SIGNUP
+  PASSWORD_RESET
+}
+
+model Commuter {
+  id           String    @id @default(cuid())
+  commuterId   String    @unique
+  fullName     String
+  mobileNumber String    @unique
+  passwordHash String
+  dateOfBirth  DateTime?
+  photoUrl     String?
+  verified     Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+model Driver {
+  id           String   @id @default(cuid())
+  driverId     String   @unique
+  fullName     String
+  mobileNumber String   @unique
+  passwordHash String
+  plateNumber  String
+  photoUrl     String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model OtpCode {
+  id           String     @id @default(cuid())
+  mobileNumber String
+  code         String
+  purpose      OtpPurpose
+  consumed     Boolean    @default(false)
+  expiresAt    DateTime
+  createdAt    DateTime   @default(now())
+
+  @@index([mobileNumber, purpose])
+}
