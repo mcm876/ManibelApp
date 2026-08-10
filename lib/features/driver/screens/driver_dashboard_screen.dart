@@ -1,20 +1,23 @@
 import 'package:flutter/material.dart';
-
-// Relative import accessing core constants
 import '../../../core/constants/app_colors.dart';
+import '../../../core/constants/app_assets.dart';
+import '../screens/driver_menu_drawer.dart';
+import 'daily_operations_screen.dart';
+import 'driver_notification_screen.dart';
+import 'start_trip.dart'; // Connected Start Trip Screen
 
 class DriverDashboardScreen extends StatefulWidget {
   final String driverName;
   final String driverId;
-  final int todayTrips;
-  final double earningsToday;
+  final String plateNumber;
+  final String routeName;
 
   const DriverDashboardScreen({
     super.key,
-    this.driverName = 'Juan Dela Cruz',
-    this.driverId = 'MB-2024-0001',
-    this.todayTrips = 12,
-    this.earningsToday = 1250.0,
+    required this.driverName,
+    required this.driverId,
+    this.plateNumber = 'ABC 1234',
+    this.routeName = 'Quiapo - Pasig',
   });
 
   @override
@@ -23,387 +26,625 @@ class DriverDashboardScreen extends StatefulWidget {
 
 class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
-  bool _isOnline = false;
+  String _selectedStatus = 'Offline';
 
-  // Opens the full-screen interactive route preview
-  void _openFullMapRoute() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => _buildExpandedMapModal(context),
-    );
+  // Dynamic metrics state
+  int _todaysTrips = 12;
+  double _todaysEarnings = 1250.0;
+  bool _hasUnreadNotification = true;
+
+  /// Determines dynamic greeting based on current time of day
+  String _getGreeting() {
+    final hour = DateTime.now().hour;
+    if (hour < 12) {
+      return 'Good morning,';
+    } else if (hour < 17) {
+      return 'Good afternoon,';
+    } else {
+      return 'Good evening,';
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       key: _scaffoldKey,
-      backgroundColor: const Color(0xFFF9FAFB),
-      
-      // Settings Drawer (Triggered by top-left 3-line icon)
-      drawer: Drawer(
-        child: ListView(
-          padding: EdgeInsets.zero,
-          children: [
-            UserAccountsDrawerHeader(
-              decoration: const BoxDecoration(color: AppColors.logoBlue),
-              accountName: Text(
-                widget.driverName,
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-              ),
-              accountEmail: Text('Driver ID: ${widget.driverId}'),
-              currentAccountPicture: const CircleAvatar(
-                backgroundColor: Colors.white,
-                child: Icon(Icons.person, size: 40, color: AppColors.logoBlue),
-              ),
-            ),
-            ListTile(
-              leading: const Icon(Icons.settings),
-              title: const Text('Settings'),
-              onTap: () {
-                Navigator.pop(context);
-                // TODO: Navigate to Settings Screen
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.logout, color: AppColors.errorRed),
-              title: const Text('Logout', style: TextStyle(color: AppColors.errorRed)),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.pop(context); // Return to login
-              },
-            ),
-          ],
-        ),
-      ),
+      backgroundColor: const Color(0xFFF8F9FA),
 
-      // Floating Action Button - Start Trip
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
-      floatingActionButton: Container(
-        height: 70,
-        width: 70,
-        margin: const EdgeInsets.only(bottom: 10),
-        child: FloatingActionButton(
-          onPressed: () {
-            // TODO: Start Trip logic
-          },
-          backgroundColor: Colors.white,
-          elevation: 4,
-          shape: const CircleBorder(
-            side: BorderSide(color: Color(0xFFE5E7EB), width: 1.5),
-          ),
-          child: const Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.directions_bus, color: AppColors.logoBlue, size: 28),
-              SizedBox(height: 2),
-              Text(
-                'Start Trip',
-                style: TextStyle(
-                  color: AppColors.textPrimary,
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-        ),
+      // Custom Drawer with Dynamic Plate Number and Route Name
+      drawer: DriverMenuDrawer(
+        driverName: widget.driverName,
+        driverId: widget.driverId,
+        plateNumber: widget.plateNumber,
+        routeName: widget.routeName,
       ),
 
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Top Header Bar
-              Row(
+        child: Column(
+          children: [
+            // 1. TOP NAVBAR HEADER
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+              child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   IconButton(
-                    icon: const Icon(Icons.menu, size: 28, color: AppColors.textPrimary),
-                    onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+                    icon: const Icon(Icons.menu_rounded, size: 30, color: Colors.black87),
+                    onPressed: () {
+                      _scaffoldKey.currentState?.openDrawer();
+                    },
                   ),
-                  RichText(
-                    text: const TextSpan(
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        fontFamily: 'Sans-Serif',
+
+                  // Center Logo
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Image.asset(
+                        AppAssets.jeepneyLogo,
+                        width: 64,
+                        height: 64,
+                        fit: BoxFit.contain,
+                        errorBuilder: (context, error, stackTrace) => const Icon(
+                          Icons.directions_bus_filled_rounded,
+                          size: 48,
+                          color: AppColors.logoBlue,
+                        ),
                       ),
-                      children: [
-                        TextSpan(text: 'Manibel', style: TextStyle(color: AppColors.logoBlue)),
-                        TextSpan(text: 'App', style: TextStyle(color: AppColors.logoRed)),
-                      ],
-                    ),
+                      const SizedBox(width: 8),
+                      RichText(
+                        text: const TextSpan(
+                          style: TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w900,
+                          ),
+                          children: [
+                            TextSpan(
+                              text: 'Manibel',
+                              style: TextStyle(color: AppColors.logoBlue),
+                            ),
+                            TextSpan(
+                              text: 'App',
+                              style: TextStyle(color: AppColors.logoRed),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.notifications_none_outlined, size: 28, color: AppColors.textPrimary),
-                    onPressed: () {},
+
+                  // Dynamic Notification Bell Icon
+                  Stack(
+                    alignment: Alignment.topRight,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.notifications_none_rounded, size: 28, color: Colors.black87),
+                        onPressed: () async {
+                          setState(() {
+                            _hasUnreadNotification = false;
+                          });
+
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => NotificationsScreen(driverId: widget.driverId),
+                            ),
+                          );
+                        },
+                      ),
+                      if (_hasUnreadNotification)
+                        Positioned(
+                          right: 12,
+                          top: 12,
+                          child: Container(
+                            width: 10,
+                            height: 10,
+                            decoration: const BoxDecoration(
+                              color: Color(0xFFE23F3F),
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 ],
               ),
-              const SizedBox(height: 16),
+            ),
 
-              // Driver Profile Header Card
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.04),
-                      blurRadius: 10,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Row(
+            // 2. DASHBOARD CONTENT LIST
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 18.0, vertical: 8.0),
+                child: Column(
                   children: [
-                    const CircleAvatar(
-                      radius: 28,
-                      backgroundColor: Color(0xFFE5E7EB),
-                      child: Icon(Icons.person, size: 36, color: AppColors.textSecondary),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                    // PROFILE GREETING CARD
+                    _buildCardWrapper(
+                      child: Row(
                         children: [
-                          const Text(
-                            'Good morning,',
-                            style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                          const CircleAvatar(
+                            radius: 28,
+                            backgroundColor: Color(0xFFD9D9D9),
+                            child: Icon(Icons.person, size: 36, color: Colors.black38),
                           ),
-                          Text(
-                            widget.driverName,
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: AppColors.textPrimary,
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _getGreeting(),
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.black54,
+                                  ),
+                                ),
+                                Text(
+                                  widget.driverName,
+                                  style: const TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w900,
+                                    color: Colors.black,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                Text(
+                                  'Driver ID: ${widget.driverId}',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                    color: AppColors.logoBlue,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                          Text(
-                            'Driver ID: ${widget.driverId}',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.logoBlue,
+
+                          // Status Badge Dropdown
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: _selectedStatus == 'Online'
+                                  ? const Color(0xFFE8F5E9)
+                                  : const Color(0xFFFADBD8),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(
+                                color: _selectedStatus == 'Online'
+                                    ? Colors.green
+                                    : const Color(0xFFE6B0AA),
+                              ),
+                            ),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                value: _selectedStatus,
+                                isDense: true,
+                                icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 18),
+                                items: <String>['Offline', 'Online'].map((String value) {
+                                  return DropdownMenuItem<String>(
+                                    value: value,
+                                    child: Row(
+                                      children: [
+                                        Container(
+                                          width: 8,
+                                          height: 8,
+                                          decoration: BoxDecoration(
+                                            shape: BoxShape.circle,
+                                            color: value == 'Online' ? Colors.green : Colors.red,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Text(
+                                          value,
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.bold,
+                                            color: value == 'Online'
+                                                ? Colors.green[800]
+                                                : Colors.red[800],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                }).toList(),
+                                onChanged: (newValue) {
+                                  if (newValue != null) {
+                                    setState(() {
+                                      _selectedStatus = newValue;
+                                    });
+                                  }
+                                },
+                              ),
                             ),
                           ),
                         ],
                       ),
                     ),
-                    // Online/Offline Status Switch
-                    InkWell(
-                      onTap: () {
-                        setState(() {
-                          _isOnline = !_isOnline;
-                        });
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: _isOnline ? const Color(0xFFDCFCE7) : const Color(0xFFFEE2E2),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: _isOnline ? Colors.green : AppColors.errorRed,
+                    const SizedBox(height: 14),
+
+                    // LIVE LOCATION TRACKING MAP PREVIEW
+                    _buildCardWrapper(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text(
+                                'Live Location Tracking',
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w900,
+                                  color: Colors.black,
+                                ),
+                              ),
+                              Row(
+                                children: [
+                                  Container(
+                                    width: 8,
+                                    height: 8,
+                                    decoration: const BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: Colors.green,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  const Text(
+                                    'Live',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.green,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
                           ),
-                        ),
-                        child: Row(
-                          children: [
-                            CircleAvatar(
-                              radius: 4,
-                              backgroundColor: _isOnline ? Colors.green : AppColors.errorRed,
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              _isOnline ? 'Online' : 'Offline',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                                color: _isOnline ? Colors.green.shade800 : AppColors.errorRed,
+                          const SizedBox(height: 10),
+
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
+                            child: SizedBox(
+                              height: 180,
+                              width: double.infinity,
+                              child: Stack(
+                                children: [
+                                  Container(
+                                    color: const Color(0xFFE5E9EE),
+                                    child: const Center(
+                                      child: Icon(
+                                        Icons.map_outlined,
+                                        size: 60,
+                                        color: Colors.black26,
+                                      ),
+                                    ),
+                                  ),
+                                  Positioned(
+                                    right: 10,
+                                    bottom: 10,
+                                    child: Column(
+                                      children: [
+                                        _buildMapCircleBtn(Icons.my_location_rounded),
+                                        const SizedBox(height: 8),
+                                        _buildMapCircleBtn(Icons.layers_rounded),
+                                      ],
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
-                            const Icon(Icons.keyboard_arrow_down, size: 16),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
                     ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
+                    const SizedBox(height: 14),
 
-              // Map Preview Section (Pasig - Quiapo Route)
-              GestureDetector(
-                onTap: _openFullMapRoute,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.04),
-                        blurRadius: 10,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.all(12.0),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Text(
-                              'Live Location Tracking',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 14,
-                                color: AppColors.textPrimary,
+                    // SUMMARY STATS (TODAY'S TRIPS & EARNINGS)
+                    _buildCardWrapper(
+                      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Row(
+                              children: [
+                                _buildStatIcon(
+                                  icon: Icons.directions_bus_rounded,
+                                  bgColor: const Color(0xFF2E5AAC),
+                                ),
+                                const SizedBox(width: 10),
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      "Today's Trips",
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                        color: Colors.black54,
+                                      ),
+                                    ),
+                                    Row(
+                                      crossAxisAlignment: CrossAxisAlignment.baseline,
+                                      textBaseline: TextBaseline.alphabetic,
+                                      children: [
+                                        Text(
+                                          '$_todaysTrips',
+                                          style: const TextStyle(
+                                            fontSize: 20,
+                                            fontWeight: FontWeight.w900,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        const Text(
+                                          'Trips',
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.black45,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+
+                          Container(
+                            height: 36,
+                            width: 1,
+                            color: Colors.black12,
+                          ),
+
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.only(left: 14.0),
+                              child: Row(
+                                children: [
+                                  _buildStatIcon(
+                                    icon: Icons.payments_rounded,
+                                    bgColor: const Color(0xFFE5A800),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      const Text(
+                                        'Earnings',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w700,
+                                          color: Colors.black54,
+                                        ),
+                                      ),
+                                      Row(
+                                        crossAxisAlignment: CrossAxisAlignment.baseline,
+                                        textBaseline: TextBaseline.alphabetic,
+                                        children: [
+                                          Text(
+                                            '₱${_todaysEarnings.toStringAsFixed(0)}',
+                                            style: const TextStyle(
+                                              fontSize: 20,
+                                              fontWeight: FontWeight.w900,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 4),
+                                          const Text(
+                                            'Today',
+                                            style: TextStyle(
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.black45,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ],
                               ),
                             ),
-                            Row(
-                              children: const [
-                                CircleAvatar(radius: 4, backgroundColor: Colors.green),
-                                SizedBox(width: 4),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+
+                    // DAILY OPERATIONS DASHBOARD CARD
+                    _buildCardWrapper(
+                      onTap: () async {
+                        final dynamic result = await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const DailyOperationsScreen(),
+                          ),
+                        );
+
+                        if (!mounted) return;
+
+                        if (result != null && result is Map) {
+                          setState(() {
+                            if (result.containsKey('earnings')) {
+                              _todaysEarnings = (result['earnings'] as num).toDouble();
+                            }
+                          });
+                        }
+                      },
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFE8F5E9),
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: const Icon(
+                              Icons.local_gas_station_rounded,
+                              size: 30,
+                              color: Color(0xFF2E7D32),
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          const Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
                                 Text(
-                                  'Live',
+                                  'Daily Operations Dashboard',
                                   style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.green,
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w900,
+                                    color: Colors.black,
+                                  ),
+                                ),
+                                SizedBox(height: 2),
+                                Text(
+                                  'Check if your revenue is higher than your gas expense',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.black45,
                                   ),
                                 ),
                               ],
                             ),
-                          ],
-                        ),
-                      ),
-                      
-                      // Map Graphic Container
-                      ClipRRect(
-                        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
-                        child: Container(
-                          height: 180,
-                          width: double.infinity,
-                          color: const Color(0xFFE5E7EB),
-                          child: Stack(
-                            children: [
-                              // Grid/Road Simulation Graphic
-                              Positioned.fill(
-                                child: CustomPaint(
-                                  painter: MapRoutePainter(),
-                                ),
-                              ),
-                              // Route Indicator Tag
-                              Positioned(
-                                top: 10,
-                                left: 10,
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.9),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: const Text(
-                                    'Route: Pasig - Quiapo',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.bold,
-                                      color: AppColors.textPrimary,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              // Expand Map Hint Overlay
-                              Positioned(
-                                bottom: 10,
-                                right: 10,
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                  decoration: BoxDecoration(
-                                    color: AppColors.logoBlue,
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: const Row(
-                                    children: [
-                                      Icon(Icons.zoom_out_map, size: 14, color: Colors.white),
-                                      SizedBox(width: 4),
-                                      Text(
-                                        'Tap to Expand',
-                                        style: TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ],
                           ),
-                        ),
+                          const Icon(
+                            Icons.arrow_forward_ios_rounded,
+                            size: 20,
+                            color: Color(0xFF2E5AAC),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
+                    ),
+                    const SizedBox(height: 14),
+
+                    // LIVE TRIP MAP CARD
+                    _buildCardWrapper(
+                      onTap: () {},
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFE3F2FD),
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: const Icon(
+                              Icons.pin_drop_rounded,
+                              size: 30,
+                              color: Color(0xFF0288D1),
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          const Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Live Trip Map',
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w900,
+                                    color: Colors.black,
+                                  ),
+                                ),
+                                SizedBox(height: 2),
+                                Text(
+                                  'Enables real-time GPS tracking of vehicles, allowing users to view the current location.',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.black45,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Icon(
+                            Icons.arrow_forward_ios_rounded,
+                            size: 20,
+                            color: Color(0xFF2E5AAC),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 80),
+                  ],
                 ),
               ),
-              const SizedBox(height: 16),
+            ),
+          ],
+        ),
+      ),
 
-              // Dynamic 2-Card Stats Row (Today's Trips & Earnings)
-              Row(
-                children: [
-                  Expanded(
-                    child: _buildStatCard(
-                      icon: Icons.directions_bus_filled,
-                      iconBg: const Color(0xFFDBEAFE),
-                      iconColor: AppColors.logoBlue,
-                      title: "Today's Trips",
-                      value: '${widget.todayTrips}',
-                      subtitle: 'Trips',
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: _buildStatCard(
-                      icon: Icons.account_balance_wallet,
-                      iconBg: const Color(0xFFFEF3C7),
-                      iconColor: const Color(0xFFD97706),
-                      title: 'Earnings',
-                      value: '₱${widget.earningsToday.toStringAsFixed(0)}',
-                      subtitle: 'Today',
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
+      // CENTERED FLOATING START TRIP BUTTON
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+      floatingActionButton: Container(
+        width: 82,
+        height: 82,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.white,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.15),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: RawMaterialButton(
+          onPressed: () async {
+            // 1. Instantly set status to Online
+            setState(() {
+              _selectedStatus = 'Online';
+            });
 
-              // Operations Dashboard Link Card
-              _buildNavigationCard(
-                icon: Icons.local_gas_station,
-                iconBg: const Color(0xFFDCFCE7),
-                iconColor: Colors.green.shade700,
-                title: 'Daily Operations Dashboard',
-                subtitle: 'Check if your revenue is higher than your gas expense',
-                onTap: () {},
+            // 2. Open StartTripScreen & wait until driver ends trip
+            final dynamic result = await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => StartTripScreen(
+                  driverName: widget.driverName,
+                  driverId: widget.driverId,
+                  plateNumber: widget.plateNumber,
+                  routeName: widget.routeName,
+                ),
               ),
-              const SizedBox(height: 12),
+            );
 
-              // Live Trip Map Link Card
-              _buildNavigationCard(
-                icon: Icons.pin_drop,
-                iconBg: const Color(0xFFE0F2FE),
-                iconColor: AppColors.logoBlue,
-                title: 'Live Trip Map',
-                subtitle: 'Enables real-time GPS tracking of vehicles along route',
-                onTap: _openFullMapRoute,
+            if (!mounted) return;
+
+            // 3. Set status back based on return data (e.g. back to Offline when End Trip is tapped)
+            if (result != null && result is Map && result.containsKey('status')) {
+              setState(() {
+                _selectedStatus = result['status'] as String;
+              });
+            }
+          },
+          shape: const CircleBorder(),
+          elevation: 0,
+          child: const Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.directions_bus_filled_rounded,
+                size: 32,
+                color: Color(0xFF2E5AAC),
               ),
-              const SizedBox(height: 80), // Padding space for floating action button
+              SizedBox(height: 2),
+              Text(
+                'Start Trip',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w900,
+                  color: Colors.black87,
+                ),
+              ),
             ],
           ),
         ),
@@ -411,257 +652,64 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
     );
   }
 
-  // Stat Card Widget Builder
-  Widget _buildStatCard({
-    required IconData icon,
-    required Color iconBg,
-    required Color iconColor,
-    required String title,
-    required String value,
-    required String subtitle,
+  Widget _buildCardWrapper({
+    required Widget child,
+    EdgeInsetsGeometry padding = const EdgeInsets.all(16),
+    VoidCallback? onTap,
   }) {
     return Container(
-      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
+            blurRadius: 8,
+            offset: const Offset(0, 3),
           ),
         ],
       ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(color: iconBg, shape: BoxShape.circle),
-            child: Icon(icon, color: iconColor, size: 22),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(20),
+          child: Padding(
+            padding: padding,
+            child: child,
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
-                ),
-                Text(
-                  value,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-                Text(
-                  subtitle,
-                  style: const TextStyle(fontSize: 10, color: AppColors.textSecondary),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Navigation Option Builder
-  Widget _buildNavigationCard({
-    required IconData icon,
-    required Color iconBg,
-    required Color iconColor,
-    required String title,
-    required String subtitle,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 10,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: iconBg, shape: BoxShape.circle),
-              child: Icon(icon, color: iconColor, size: 26),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
-                  ),
-                ],
-              ),
-            ),
-            const Icon(Icons.arrow_forward_ios, size: 16, color: AppColors.logoBlue),
-          ],
         ),
       ),
     );
   }
 
-  // Expanded Pasig - Quiapo Route Map Modal with Waiting Passengers
-  Widget _buildExpandedMapModal(BuildContext context) {
+  Widget _buildStatIcon({required IconData icon, required Color bgColor}) {
     return Container(
-      height: MediaQuery.of(context).size.height * 0.85,
-      decoration: const BoxDecoration(
+      width: 36,
+      height: 36,
+      decoration: BoxDecoration(
+        color: bgColor,
+        shape: BoxShape.circle,
+      ),
+      child: Icon(icon, color: Colors.white, size: 20),
+    );
+  }
+
+  Widget _buildMapCircleBtn(IconData icon) {
+    return Container(
+      width: 32,
+      height: 32,
+      decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      child: Column(
-        children: [
-          // Header Bar
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Pasig - Quiapo Route Map',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                    ),
-                    Text(
-                      'Live Waiting Passengers along route',
-                      style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
-                    ),
-                  ],
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close),
-                  onPressed: () => Navigator.pop(context),
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1),
-
-          // Interactive Map Simulation Area
-          Expanded(
-            child: Stack(
-              children: [
-                // Background Base Map
-                Container(
-                  color: const Color(0xFFE5E7EB),
-                  child: CustomPaint(
-                    size: Size.infinite,
-                    painter: MapRoutePainter(),
-                  ),
-                ),
-
-                // Passenger Waiting Clusters on Route
-                _buildPassengerMarker(top: 120, left: 80, count: 5, stopName: 'Pasig Palengke'),
-                _buildPassengerMarker(top: 240, left: 180, count: 8, stopName: 'Shaw Blvd / EDSA'),
-                _buildPassengerMarker(top: 360, left: 120, count: 3, stopName: 'Stop & Shop'),
-                _buildPassengerMarker(top: 480, left: 240, count: 12, stopName: 'Quiapo Church'),
-              ],
-            ),
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.15),
+            blurRadius: 4,
           ),
         ],
       ),
+      child: Icon(icon, size: 18, color: Colors.black87),
     );
   }
-
-  // Passenger Waiting Circle Marker Widget
-  Widget _buildPassengerMarker({
-    required double top,
-    required double left,
-    required int count,
-    required String stopName,
-  }) {
-    return Positioned(
-      top: top,
-      left: left,
-      child: Column(
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-              color: Colors.black87,
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(
-              stopName,
-              style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
-            ),
-          ),
-          const SizedBox(height: 4),
-          CircleAvatar(
-            radius: 18,
-            backgroundColor: AppColors.logoRed,
-            child: CircleAvatar(
-              radius: 16,
-              backgroundColor: AppColors.splashBackground,
-              child: Text(
-                '$count',
-                style: const TextStyle(
-                  color: Colors.black,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// Custom Painter to render simulated roads and routes on map
-class MapRoutePainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final roadPaint = Paint()
-      ..color = Colors.white
-      ..strokeWidth = 14
-      ..style = PaintingStyle.stroke;
-
-    final routePaint = Paint()
-      ..color = AppColors.logoBlue.withOpacity(0.8)
-      ..strokeWidth = 6
-      ..style = PaintingStyle.stroke;
-
-    final path = Path();
-    path.moveTo(40, 40);
-    path.quadraticBezierTo(size.width * 0.8, size.height * 0.3, size.width * 0.3, size.height * 0.6);
-    path.lineTo(size.width * 0.7, size.height * 0.9);
-
-    canvas.drawPath(path, roadPaint);
-    canvas.drawPath(path, routePaint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

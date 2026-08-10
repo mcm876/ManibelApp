@@ -12,6 +12,9 @@ const List<String> _idTypeOptions = [
   'UMID',
   "Voter's ID",
   'Postal ID',
+  'SSS ID',
+  'PRC ID',
+  'Senior Citizen ID',
 ];
 
 const int _maxUploadBytes = 8 * 1024 * 1024; // 8 MB
@@ -31,7 +34,7 @@ class _CommuterVerificationScreenState extends State<CommuterVerificationScreen>
   File? _backImage;
   bool _ageConfirmed = false;
   bool _isVerifying = false;
-  bool _isPickingImage = false; // guards against double taps while a picker sheet/IO op is in flight
+  bool _isPickingImage = false;
 
   String? _idError;
   String? _frontError;
@@ -55,8 +58,6 @@ class _CommuterVerificationScreenState extends State<CommuterVerificationScreen>
   }
 
   Future<void> _pickImage({required bool isFront}) async {
-    // Guard at the source too, not just via the tile's disabled state — in
-    // case this ever gets called some other way before an ID type exists.
     if (_isPickingImage || !_canUploadId) return;
 
     final source = await showModalBottomSheet<ImageSource>(
@@ -68,26 +69,26 @@ class _CommuterVerificationScreenState extends State<CommuterVerificationScreen>
           mainAxisSize: MainAxisSize.min,
           children: [
             const Padding(
-              padding: EdgeInsets.fromLTRB(20, 18, 20, 8),
+              padding: EdgeInsets.fromLTRB(20, 20, 20, 10),
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
                   'Upload ID Photo',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: Colors.black),
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: Colors.black),
                 ),
               ),
             ),
             ListTile(
-              leading: const Icon(Icons.photo_camera_rounded, color: AppColors.logoBlue),
-              title: const Text('Take Photo', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+              leading: const Icon(Icons.photo_camera_rounded, color: AppColors.logoBlue, size: 24),
+              title: const Text('Take Photo', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
               onTap: () => Navigator.pop(sheetContext, ImageSource.camera),
             ),
             ListTile(
-              leading: const Icon(Icons.photo_library_rounded, color: AppColors.logoBlue),
-              title: const Text('Choose from Gallery', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+              leading: const Icon(Icons.photo_library_rounded, color: AppColors.logoBlue, size: 24),
+              title: const Text('Choose from Gallery', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
               onTap: () => Navigator.pop(sheetContext, ImageSource.gallery),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 12),
           ],
         ),
       ),
@@ -99,7 +100,7 @@ class _CommuterVerificationScreenState extends State<CommuterVerificationScreen>
 
     try {
       final picked = await _picker.pickImage(source: source, imageQuality: 85);
-      if (picked == null || !mounted) return; // user cancelled
+      if (picked == null || !mounted) return;
 
       final file = File(picked.path);
       final sizeBytes = await file.length();
@@ -151,9 +152,8 @@ class _CommuterVerificationScreenState extends State<CommuterVerificationScreen>
   }
 
   Future<void> _handleVerify() async {
-    if (_isVerifying) return; // prevent duplicate submissions
+    if (_isVerifying) return;
 
-    // --- Validation --------------------------------------------------
     final idError = _selectedId == null ? 'Please choose a government ID type' : null;
     final frontError = _frontImage == null ? 'Please upload the front of your ID' : null;
     final backError = _backImage == null ? 'Please upload the back of your ID' : null;
@@ -171,7 +171,6 @@ class _CommuterVerificationScreenState extends State<CommuterVerificationScreen>
     setState(() => _isVerifying = true);
 
     try {
-      // TODO: replace with the real ID-type + photo upload submission call.
       await Future<void>.delayed(const Duration(milliseconds: 700));
       if (!mounted) return;
 
@@ -205,86 +204,92 @@ class _CommuterVerificationScreenState extends State<CommuterVerificationScreen>
         foregroundColor: Colors.black87,
         title: const Text(
           'Identity Verification',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Colors.black),
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Colors.black),
         ),
       ),
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
           children: [
+            // Info Banner
             Container(
-              padding: const EdgeInsets.all(14),
+              padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
                 color: const Color(0xFFEAF1FE),
-                borderRadius: BorderRadius.circular(14),
+                borderRadius: BorderRadius.circular(16),
               ),
               child: const Row(
                 children: [
-                  Icon(Icons.info_outline_rounded, color: AppColors.logoBlue, size: 20),
-                  SizedBox(width: 10),
+                  Icon(Icons.info_outline_rounded, color: AppColors.logoBlue, size: 24),
+                  SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      "We need to verify your identity before you can book rides. Choose a valid government ID and upload clear photos of both sides.",
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1F4B99)),
+                      "We need to verify your identity before you can continue using ManibelApp. Choose a valid government ID and upload clear photos of both sides.",
+                      style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600, color: Color(0xFF1F4B99), height: 1.35),
                     ),
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 24),
+
+            // Dropdown Section
             const Text(
               'Government ID Type',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: Colors.black),
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Colors.black),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             DropdownButtonFormField<String>(
               initialValue: _selectedId,
               onChanged: _handleIdTypeChanged,
-              icon: const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.black54),
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.black),
+              icon: const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.black54, size: 26),
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.black),
               decoration: InputDecoration(
                 hintText: 'Select ID type',
-                hintStyle: const TextStyle(color: Colors.black38, fontWeight: FontWeight.w600, fontSize: 13),
+                hintStyle: const TextStyle(color: Colors.black38, fontWeight: FontWeight.w600, fontSize: 15),
                 filled: true,
                 fillColor: Colors.white,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(16),
                   borderSide: const BorderSide(color: Color(0xFFEDEDED)),
                 ),
                 enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(16),
                   borderSide: const BorderSide(color: Color(0xFFEDEDED)),
                 ),
                 focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  borderSide: const BorderSide(color: AppColors.logoBlue, width: 1.5),
+                  borderRadius: BorderRadius.circular(16),
+                  borderSide: const BorderSide(color: AppColors.logoBlue, width: 1.8),
                 ),
                 errorBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(16),
                   borderSide: const BorderSide(color: Color(0xFFE23F3F)),
                 ),
                 errorText: _idError,
-                errorStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFFE23F3F)),
+                errorStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFFE23F3F)),
               ),
               items: _idTypeOptions
                   .map((label) => DropdownMenuItem(value: label, child: Text(label)))
                   .toList(),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 26),
+
+            // Upload Section
             const Text(
               'Upload ID Photos',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: Colors.black),
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Colors.black),
             ),
             if (!_canUploadId)
               const Padding(
-                padding: EdgeInsets.only(top: 4),
+                padding: EdgeInsets.only(top: 6),
                 child: Text(
                   'Select a government ID type above to enable uploads.',
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.black45),
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.black45),
                 ),
               ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
+
             _IdUploadTile(
               label: 'Front of ID',
               file: _frontImage,
@@ -293,7 +298,8 @@ class _CommuterVerificationScreenState extends State<CommuterVerificationScreen>
               onUpload: () => _pickImage(isFront: true),
               onRemove: () => _removeImage(isFront: true),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
+
             _IdUploadTile(
               label: 'Back of ID',
               file: _backImage,
@@ -302,13 +308,15 @@ class _CommuterVerificationScreenState extends State<CommuterVerificationScreen>
               onUpload: () => _pickImage(isFront: false),
               onRemove: () => _removeImage(isFront: false),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 26),
+
+            // Age Confirmation Tile
             Container(
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(16),
                 boxShadow: [
-                  BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 3)),
+                  BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 10, offset: const Offset(0, 4)),
                 ],
                 border: Border.all(
                   color: _ageError != null ? const Color(0xFFE23F3F) : Colors.transparent,
@@ -319,42 +327,44 @@ class _CommuterVerificationScreenState extends State<CommuterVerificationScreen>
                 onChanged: _toggleAgeConfirmed,
                 controlAffinity: ListTileControlAffinity.leading,
                 activeColor: AppColors.logoBlue,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                 title: const Text(
                   'I confirm that I am 18 years old or above',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.black),
+                  style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700, color: Colors.black),
                 ),
               ),
             ),
             if (_ageError != null)
               Padding(
-                padding: const EdgeInsets.only(top: 6, left: 4),
+                padding: const EdgeInsets.only(top: 6, left: 6),
                 child: Text(
                   _ageError!,
-                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFFE23F3F)),
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFFE23F3F)),
                 ),
               ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 32),
+
+            // Submit Button
             SizedBox(
               width: double.infinity,
+              height: 54,
               child: ElevatedButton(
                 onPressed: _isVerifying ? null : _handleVerify,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.logoBlue,
                   disabledBackgroundColor: AppColors.logoBlue.withOpacity(0.6),
-                  padding: const EdgeInsets.symmetric(vertical: 15),
                   elevation: 0,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                 ),
                 child: _isVerifying
                     ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(strokeWidth: 2.6, color: Colors.white),
                       )
                     : const Text(
                         'Verify',
-                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: Colors.white),
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Colors.white),
                       ),
               ),
             ),
@@ -387,60 +397,58 @@ class _IdUploadTile extends StatelessWidget {
     final hasImage = file != null;
 
     return Opacity(
-      // Visually communicate the disabled (no-ID-type-yet) state, distinct
-      // from the transient "picker in flight" disabled state which doesn't
-      // need dimming since it's momentary.
       opacity: disabled && !hasImage ? 0.5 : 1,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Material(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(16),
             child: InkWell(
               onTap: disabled ? null : onUpload,
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(16),
               child: Container(
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(16),
                   border: Border.all(
                     color: error != null
                         ? const Color(0xFFE23F3F)
                         : (hasImage ? const Color(0xFF2E9E6D) : const Color(0xFFEDEDED)),
+                    width: 1.2,
                   ),
                   boxShadow: [
-                    BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 6, offset: const Offset(0, 2)),
+                    BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 3)),
                   ],
                 ),
                 child: Row(
                   children: [
                     ClipRRect(
-                      borderRadius: BorderRadius.circular(10),
+                      borderRadius: BorderRadius.circular(12),
                       child: hasImage
-                          ? Image.file(file!, width: 56, height: 44, fit: BoxFit.cover)
+                          ? Image.file(file!, width: 72, height: 52, fit: BoxFit.cover)
                           : Container(
-                              width: 56,
-                              height: 44,
+                              width: 72,
+                              height: 52,
                               color: const Color(0xFFF5F6F8),
-                              child: const Icon(Icons.badge_outlined, color: Colors.black38, size: 22),
+                              child: const Icon(Icons.badge_outlined, color: Colors.black38, size: 28),
                             ),
                     ),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 16),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
                             label,
-                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: Colors.black),
+                            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: Colors.black),
                           ),
-                          const SizedBox(height: 2),
+                          const SizedBox(height: 4),
                           Text(
                             hasImage ? 'Photo selected' : 'Tap to take a photo or upload',
                             style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w500,
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w600,
                               color: hasImage ? const Color(0xFF2E9E6D) : Colors.black45,
                             ),
                           ),
@@ -450,13 +458,13 @@ class _IdUploadTile extends StatelessWidget {
                     if (hasImage)
                       IconButton(
                         onPressed: disabled ? null : onRemove,
-                        icon: const Icon(Icons.close_rounded, color: Colors.black45, size: 20),
+                        icon: const Icon(Icons.close_rounded, color: Colors.black45, size: 22),
                       )
                     else
                       Icon(
                         Icons.upload_rounded,
                         color: disabled ? Colors.black26 : AppColors.logoBlue,
-                        size: 20,
+                        size: 24,
                       ),
                   ],
                 ),
@@ -465,10 +473,10 @@ class _IdUploadTile extends StatelessWidget {
           ),
           if (error != null)
             Padding(
-              padding: const EdgeInsets.only(top: 6, left: 4),
+              padding: const EdgeInsets.only(top: 6, left: 6),
               child: Text(
                 error!,
-                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFFE23F3F)),
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFFE23F3F)),
               ),
             ),
         ],

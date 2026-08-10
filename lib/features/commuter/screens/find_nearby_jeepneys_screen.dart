@@ -11,7 +11,6 @@ class JeepneyModel {
   final String id; // e.g. "MB-001"
   final String route; // e.g. "Bayan Terminal - Plaza"
   final String driverName;
-  final int seatingCapacity;
   final double distanceKm;
   final int etaMinutes;
   final LatLng position;
@@ -21,7 +20,6 @@ class JeepneyModel {
     required this.id,
     required this.route,
     required this.driverName,
-    required this.seatingCapacity,
     required this.distanceKm,
     required this.etaMinutes,
     required this.position,
@@ -132,7 +130,6 @@ class _FindNearbyJeepneysScreenState extends State<FindNearbyJeepneysScreen> {
       id: 'MB-001',
       route: 'Bayan Terminal - Plaza',
       driverName: 'Juan Dela Cruz',
-      seatingCapacity: 24,
       distanceKm: 0.2,
       etaMinutes: 5,
       position: LatLng(14.5790, 121.0870),
@@ -141,7 +138,6 @@ class _FindNearbyJeepneysScreenState extends State<FindNearbyJeepneysScreen> {
       id: 'MB-012',
       route: 'Bayan Terminal - Plaza',
       driverName: 'Ramon Santos',
-      seatingCapacity: 16,
       distanceKm: 1.2,
       etaMinutes: 8,
       position: LatLng(14.5810, 121.0900),
@@ -150,7 +146,6 @@ class _FindNearbyJeepneysScreenState extends State<FindNearbyJeepneysScreen> {
       id: 'MB-025',
       route: 'Bayan Terminal - Plaza',
       driverName: 'Mario Reyes',
-      seatingCapacity: 24,
       distanceKm: 1.8,
       etaMinutes: 10,
       position: LatLng(14.5745, 121.0830),
@@ -247,10 +242,6 @@ class _FindNearbyJeepneysScreenState extends State<FindNearbyJeepneysScreen> {
   // ---------------------------------------------------------------------
 
   Widget _buildMap() {
-    // Wait for the permission check to resolve before creating the
-    // GoogleMap widget with myLocationEnabled: true — enabling it
-    // before Android has actually granted permission is what causes
-    // the map (and sometimes the whole screen) to hang.
     if (!_locationChecked) {
       return const ColoredBox(
         color: Color(0xFFE9ECEE),
@@ -419,8 +410,6 @@ class _FindNearbyJeepneysScreenState extends State<FindNearbyJeepneysScreen> {
     );
   }
 
-  /// Starting height (as a fraction of screen height) for each panel
-  /// state, before the user drags it up or down.
   double _initialSheetSizeFor(_PanelState state) {
     switch (state) {
       case _PanelState.nearbyList:
@@ -570,10 +559,6 @@ class _TripHeader extends StatelessWidget {
                 'Driver: ${jeepney.driverName}',
                 style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
               ),
-              Text(
-                'Seating Capacity: ${jeepney.seatingCapacity} Seats',
-                style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
-              ),
             ],
           ),
         ),
@@ -721,13 +706,6 @@ class _JeepneyListTile extends StatelessWidget {
                   ),
                   Text(
                     '${jeepney.distanceKm} km away',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.grey.shade600,
-                    ),
-                  ),
-                  Text(
-                    'Seating Capacity: ${jeepney.seatingCapacity}',
                     style: TextStyle(
                       fontSize: 12,
                       color: Colors.grey.shade600,

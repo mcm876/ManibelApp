@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../driver/screens/driver_dashboard_screen.dart';
+import '../services/auth_service.dart';
+import 'forgot_password_screen.dart';
 
 class DriverLoginScreen extends StatefulWidget {
   const DriverLoginScreen({super.key});
@@ -11,7 +13,7 @@ class DriverLoginScreen extends StatefulWidget {
 
 class _DriverLoginScreenState extends State<DriverLoginScreen> {
   final _formKey = GlobalKey<FormState>();
-  final TextEditingController _phoneController = TextEditingController(text: '+63');
+  final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
 
   bool _isPasswordObscured = true;
@@ -24,28 +26,69 @@ class _DriverLoginScreenState extends State<DriverLoginScreen> {
     super.dispose();
   }
 
+  void _handleForgotPassword() {
+    FocusScope.of(context).unfocus();
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const ForgotPasswordScreen(),
+      ),
+    );
+  }
+
   void _handleLogin() async {
+    FocusScope.of(context).unfocus();
+
     if (_formKey.currentState?.validate() ?? false) {
       setState(() {
         _isLoading = true;
       });
 
-      // Simulate authentication API call
-      await Future.delayed(const Duration(seconds: 1));
+      try {
+        await Future.delayed(const Duration(seconds: 1)); // Simulate API call
 
-      if (!mounted) return;
+        // Store entered password so it can be updated dynamically in Settings later
+        AuthService.activePassword = _passwordController.text.trim();
 
-      setState(() {
-        _isLoading = false;
-      });
+        String mockDriverName = 'Juan Dela Cruz';
+        String mockDriverId = 'MB-2024-0001';
 
-      // Navigate to Driver Dashboard upon successful login
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (context) => const DriverDashboardScreen(),
-        ),
-      );
+        if (_phoneController.text.contains('2') || _phoneController.text.contains('999')) {
+          mockDriverName = 'Ricardo Dalisay';
+          mockDriverId = 'MB-2024-0088';
+        }
+
+        if (!mounted) return;
+
+        setState(() {
+          _isLoading = false;
+        });
+
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => DriverDashboardScreen(
+              driverName: mockDriverName,
+              driverId: mockDriverId,
+            ),
+          ),
+        );
+      } catch (e) {
+        if (!mounted) return;
+
+        setState(() {
+          _isLoading = false;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.toString().replaceAll('Exception: ', '')),
+            backgroundColor: Colors.redAccent,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
     }
   }
 
@@ -85,7 +128,6 @@ class _DriverLoginScreenState extends State<DriverLoginScreen> {
                   ),
                   const SizedBox(height: 24),
 
-                  // Header Titles
                   const Text(
                     'Login',
                     style: TextStyle(
@@ -100,20 +142,39 @@ class _DriverLoginScreenState extends State<DriverLoginScreen> {
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w700,
-                      color: Colors.black54, // Fixed invalid color getter
+                      color: Colors.black54,
                     ),
                   ),
                   const SizedBox(height: 24),
 
-                  // Phone Number Input
+                  // Mobile Input with locked +63 prefix and complete number validation
                   TextFormField(
                     controller: _phoneController,
                     keyboardType: TextInputType.phone,
+                    maxLength: 10,
                     style: const TextStyle(
                       fontWeight: FontWeight.w700,
-                      color: Colors.black87, // Fixed invalid color getter
+                      color: Colors.black87,
                     ),
                     decoration: InputDecoration(
+                      counterText: '',
+                      hintText: '9171234567',
+                      hintStyle: const TextStyle(
+                        color: Colors.black26,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      prefixIcon: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+                        child: const Text(
+                          '+63',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.black54,
+                          ),
+                        ),
+                      ),
+                      prefixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
                       filled: true,
                       fillColor: const Color(0xFFF2F2F2),
                       contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
@@ -126,6 +187,22 @@ class _DriverLoginScreenState extends State<DriverLoginScreen> {
                       if (value == null || value.trim().isEmpty) {
                         return 'Please enter your mobile number';
                       }
+
+                      String cleanValue = value.trim();
+
+                      // Strip leading '0' if entered accidentally (e.g. 0917...)
+                      if (cleanValue.startsWith('0')) {
+                        cleanValue = cleanValue.substring(1);
+                      }
+
+                      if (cleanValue.length < 10) {
+                        return 'Please enter a complete 10-digit mobile number';
+                      }
+
+                      if (cleanValue.length > 10 || int.tryParse(cleanValue) == null) {
+                        return 'Invalid mobile number (e.g. 9171234567)';
+                      }
+
                       return null;
                     },
                   ),
@@ -137,7 +214,7 @@ class _DriverLoginScreenState extends State<DriverLoginScreen> {
                     obscureText: _isPasswordObscured,
                     style: const TextStyle(
                       fontWeight: FontWeight.w700,
-                      color: Colors.black87, // Fixed invalid color getter
+                      color: Colors.black87,
                     ),
                     decoration: InputDecoration(
                       hintText: 'Password',
@@ -175,13 +252,11 @@ class _DriverLoginScreenState extends State<DriverLoginScreen> {
                   ),
                   const SizedBox(height: 8),
 
-                  // Forgot Password Link
+                  // Forgot Password Action Link
                   Align(
                     alignment: Alignment.centerRight,
                     child: GestureDetector(
-                      onTap: () {
-                        // Action for Forgot Password
-                      },
+                      onTap: _handleForgotPassword,
                       child: const Text(
                         'Forgot Password?',
                         style: TextStyle(
@@ -194,7 +269,7 @@ class _DriverLoginScreenState extends State<DriverLoginScreen> {
                   ),
                   const SizedBox(height: 24),
 
-                  // Yellow Log In Button
+                  // Submit Button
                   SizedBox(
                     width: double.infinity,
                     height: 52,
@@ -212,7 +287,7 @@ class _DriverLoginScreenState extends State<DriverLoginScreen> {
                               width: 24,
                               height: 24,
                               child: CircularProgressIndicator(
-                                color: Colors.white,
+                                color: Colors.black,
                                 strokeWidth: 2.5,
                               ),
                             )
@@ -228,7 +303,6 @@ class _DriverLoginScreenState extends State<DriverLoginScreen> {
                   ),
                   const SizedBox(height: 16),
 
-                  // Back to Welcome Action
                   GestureDetector(
                     onTap: () => Navigator.pop(context),
                     child: const Text(

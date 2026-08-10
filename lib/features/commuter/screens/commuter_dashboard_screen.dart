@@ -20,9 +20,6 @@ class CommuterDashboardScreen extends StatefulWidget {
 }
 
 class _CommuterDashboardScreenState extends State<CommuterDashboardScreen> {
-  // Seeded from the local session, which signup/settings write into. Once a
-  // real backend/auth service exists, replace this with a proper fetch of
-  // the authenticated user's profile.
   String _commuterName = UserSession.instance.fullName ?? 'Juan Dela Cruz';
   String _mobileNumber = UserSession.instance.mobileNumber ?? '';
   DateTime? _dateOfBirth = UserSession.instance.dateOfBirth;
@@ -50,10 +47,6 @@ class _CommuterDashboardScreenState extends State<CommuterDashboardScreen> {
       ),
     );
 
-    // Only commit changes if Save Changes was actually tapped. Settings no
-    // longer persists the photo on pick — it's staged locally there and
-    // only written to UserSession (and returned here) on Save — so backing
-    // out of the form leaves everything, including the photo, untouched.
     if (result == null) return;
 
     setState(() {
@@ -151,27 +144,30 @@ class _TopBar extends StatelessWidget {
           icon: const Icon(Icons.menu, color: Colors.black87),
         ),
 
+        // CENTER LOGO & APP NAME BRANDING
         Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            /* Image.asset(
+            Image.asset(
               AppAssets.jeepneyLogo,
-              width: 100,
-              height: 100,
+              width: 44, // Increased from 32 for better visibility
+              height: 44, // Increased from 32 for better visibility
+              fit: BoxFit.contain,
               errorBuilder: (context, error, stackTrace) {
                 return const Icon(
                   Icons.directions_bus_rounded,
-                  size: 28,
+                  size: 38, // Increased fallback icon size to match
                   color: AppColors.logoBlue,
                 );
               },
-            ), */
+            ),
 
-            const SizedBox(width: 1),
+            const SizedBox(width: 8),
 
             RichText(
               text: const TextSpan(
                 style: TextStyle(
-                  fontSize: 20,
+                  fontSize: 22,
                   fontWeight: FontWeight.w900,
                   letterSpacing: -0.3,
                 ),
@@ -278,7 +274,7 @@ class _NearbyJeepneysCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(12), // reduced from 16
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(18),
@@ -312,7 +308,7 @@ class _NearbyJeepneysCard extends StatelessWidget {
           SizedBox(height: 4),
 
           Text(
-            'Track active drivers and routes in real time',
+            'Track active drivers and route in real time',
             style: TextStyle(
               fontSize: 11,
               color: Colors.black45,
@@ -327,7 +323,7 @@ class _NearbyJeepneysCard extends StatelessWidget {
           SizedBox(height: 8),
 
           SizedBox(
-            height: 140, // reduced from your previous height
+            height: 140,
             child: _MapPreview(),
           ),
         ],
@@ -406,14 +402,14 @@ class _TrafficLegend extends StatelessWidget {
           color: const Color(0xFFE7E7E7),
         ),
       ),
-      width: 120, // reduced from 140
+      width: 120,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _legendRow(const Color(0xFF2E9E6D), 'SMOOTH'),
           _legendRow(const Color(0xFFE5A800), 'MODERATE'),
-          _legendRow(const Color(0xFFE23F3F), 'HEAVY'),
+          _legendRow(const Color(0xFFE23F3F), 'HEAVY TRAFFIC'),
         ],
       ),
     );

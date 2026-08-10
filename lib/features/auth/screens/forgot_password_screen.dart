@@ -13,13 +13,10 @@ class ForgotPasswordScreen extends StatefulWidget {
 
 class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   final _formKey = GlobalKey<FormState>();
-  final TextEditingController _phoneController = TextEditingController(text: '+63');
+  final TextEditingController _phoneController = TextEditingController();
 
   bool _isLoading = false;
   bool _isSubmitted = false;
-
-  // Philippine mobile format: +63 followed by 10 digits (e.g. +639171234567)
-  final RegExp _phoneRegExp = RegExp(r'^\+63\d{10}$');
 
   @override
   void dispose() {
@@ -28,17 +25,27 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   }
 
   String? _validatePhone(String? value) {
-    final phone = value?.trim().replaceAll(' ', '') ?? '';
-
-    if (phone.isEmpty) {
+    if (value == null || value.trim().isEmpty) {
       return 'Please enter your mobile number';
     }
-    if (!phone.startsWith('+63')) {
-      return 'Mobile number must start with +63';
+
+    String cleanValue = value.trim();
+
+    // Strip leading '0' if accidentally typed (e.g., 0917...)
+    if (cleanValue.startsWith('0')) {
+      cleanValue = cleanValue.substring(1);
     }
-    if (!_phoneRegExp.hasMatch(phone)) {
-      return 'Enter a valid 10-digit mobile number';
+
+    // Check if the number has fewer than 10 digits
+    if (cleanValue.length < 10) {
+      return 'Please enter a complete 10-digit mobile number';
     }
+
+    // Validate that input consists purely of numeric digits
+    if (cleanValue.length > 10 || int.tryParse(cleanValue) == null) {
+      return 'Invalid mobile number format (e.g. 9171234567)';
+    }
+
     return null;
   }
 
@@ -54,11 +61,16 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
     if (!mounted) return;
 
-    // Make sure we're checking against whatever account is actually
-    // persisted on disk, not stale in-memory fields.
+    // Load persisted session data
     await UserSession.instance.loadFromPrefs();
 
-    final normalizedPhone = PhoneUtils.toE164(_phoneController.text.trim());
+    String cleanPhone = _phoneController.text.trim();
+    if (cleanPhone.startsWith('0')) {
+      cleanPhone = cleanPhone.substring(1);
+    }
+
+    // Prepend +63 for standard E164 format check
+    final normalizedPhone = PhoneUtils.toE164('+63$cleanPhone');
 
     if (!UserSession.instance.isRegistered(normalizedPhone)) {
       setState(() {
@@ -90,11 +102,24 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
   InputDecoration _fieldDecoration({String? hintText}) {
     return InputDecoration(
+      counterText: '', // Hides default char counter text below field
       hintText: hintText,
       hintStyle: const TextStyle(
         color: Colors.black26,
         fontWeight: FontWeight.w700,
       ),
+      prefixIcon: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+        child: const Text(
+          '+63',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+            color: Colors.black54,
+          ),
+        ),
+      ),
+      prefixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
       filled: true,
       fillColor: const Color(0xFFF2F2F2),
       contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
@@ -197,15 +222,16 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                   const SizedBox(height: 28),
 
                   if (!_isSubmitted) ...[
-                    // Phone Number Input
+                    // Phone Number Input (Locked +63 prefix, max 10 digits)
                     TextFormField(
                       controller: _phoneController,
                       keyboardType: TextInputType.phone,
+                      maxLength: 10, // Prevents typing beyond 10 digits
                       style: const TextStyle(
                         fontWeight: FontWeight.w700,
                         color: Colors.black87,
                       ),
-                      decoration: _fieldDecoration(hintText: 'Mobile Number'),
+                      decoration: _fieldDecoration(hintText: '9171234567'),
                       validator: _validatePhone,
                     ),
                     const SizedBox(height: 24),

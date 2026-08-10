@@ -49,6 +49,7 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
+                  // Jeepney Graphic
                   Image.asset(
                     AppAssets.jeepneyLogo,
                     width: 150,
@@ -61,32 +62,40 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
                       );
                     },
                   ),
-                  const SizedBox(height: 8),
-                  RichText(
-                    text: const TextSpan(
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w800,
-                      ),
+                  
+                  // Pulls text up to eliminate transparent PNG padding
+                  Transform.translate(
+                    offset: const Offset(0, -32),
+                    child: Column(
                       children: [
-                        TextSpan(
-                          text: 'Manibel',
-                          style: TextStyle(color: AppColors.logoBlue),
+                        RichText(
+                          text: const TextSpan(
+                            style: TextStyle(
+                              fontSize: 32,
+                              fontWeight: FontWeight.w800,
+                            ),
+                            children: [
+                              TextSpan(
+                                text: 'Manibel',
+                                style: TextStyle(color: AppColors.logoBlue),
+                              ),
+                              TextSpan(
+                                text: 'App',
+                                style: TextStyle(color: AppColors.logoRed),
+                              ),
+                            ],
+                          ),
                         ),
-                        TextSpan(
-                          text: 'App',
-                          style: TextStyle(color: AppColors.logoRed),
+                        const SizedBox(height: 8),
+                        const Text(
+                          'Sakay na, ano tara?',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.textPrimary,
+                          ),
                         ),
                       ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Sakay na, ano tara?',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.textPrimary,
                     ),
                   ),
                 ],

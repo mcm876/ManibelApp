@@ -37,12 +37,11 @@ class _LoadingScreenState extends State<LoadingScreen> {
       body: SafeArea(
         child: SizedBox(
           width: double.infinity,
+          height: double.infinity,
           child: Column(
-            mainAxisAlignment: MainAxisAlignment.start, // Pushes content upward
+            mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              const SizedBox(height: 80), // Controls top offset for logo position
-
               // Jeepney Graphic
               Image.asset(
                 AppAssets.jeepneyLogo,
@@ -56,28 +55,28 @@ class _LoadingScreenState extends State<LoadingScreen> {
                   );
                 },
               ),
-              
-              // Reduced spacing to bring text closer to the logo
-              const SizedBox(height: 2),
 
-              // "ManibelApp" Dual Color Title
-              RichText(
-                text: const TextSpan(
-                  style: TextStyle(
-                    fontSize: 35,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: -0.5,
+              // Aggressively shifts text upward into the PNG image transparent padding
+              Transform.translate(
+                offset: const Offset(0, -50),
+                child: RichText(
+                  text: const TextSpan(
+                    style: TextStyle(
+                      fontSize: 32,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: -0.5,
+                    ),
+                    children: [
+                      TextSpan(
+                        text: 'Manibel',
+                        style: TextStyle(color: AppColors.logoBlue),
+                      ),
+                      TextSpan(
+                        text: 'App',
+                        style: TextStyle(color: AppColors.logoRed),
+                      ),
+                    ],
                   ),
-                  children: [
-                    TextSpan(
-                      text: 'Manibel',
-                      style: TextStyle(color: AppColors.logoBlue),
-                    ),
-                    TextSpan(
-                      text: 'App',
-                      style: TextStyle(color: AppColors.logoRed),
-                    ),
-                  ],
                 ),
               ),
             ],
