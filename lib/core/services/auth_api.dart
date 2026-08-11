@@ -68,6 +68,30 @@ class AuthApi {
     );
   }
 
+  /// Verifies the OTP sent right after commuter signup. Unlike
+  /// [verifyResetOtp], this doesn't return a token — the caller already has
+  /// a session token from [commuterSignUp]; this just confirms phone
+  /// ownership before moving on to ID + face verification.
+  static Future<Map<String, dynamic>> verifySignupOtp({
+    required String mobileNumber,
+    required String code,
+  }) async {
+    final json = await ApiClient.instance.post(
+      '/auth/commuter/verify-signup-otp',
+      body: {'mobileNumber': mobileNumber, 'code': code},
+    );
+    return json['commuter'] as Map<String, dynamic>;
+  }
+
+  /// Re-sends the signup-verification OTP. The server logs the code to its
+  /// console in local dev — there's no SMS gateway wired up.
+  static Future<void> resendSignupOtp({required String mobileNumber}) async {
+    await ApiClient.instance.post(
+      '/auth/commuter/resend-signup-otp',
+      body: {'mobileNumber': mobileNumber},
+    );
+  }
+
   /// Triggers a password-reset OTP for either role. The server logs the
   /// code to its console in local dev — there's no SMS gateway wired up.
   static Future<void> forgotPassword({

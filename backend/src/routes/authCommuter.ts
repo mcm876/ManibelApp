@@ -13,6 +13,7 @@ import {
   commuterSignupSchema,
   forgotPasswordSchema,
   loginSchema,
+  resendSignupOtpSchema,
   resetPasswordSchema,
   verifyOtpSchema,
 } from '../lib/validation';
@@ -25,6 +26,7 @@ function toPublicCommuter(commuter: {
   mobileNumber: string;
   dateOfBirth: Date | null;
   photoUrl: string | null;
+  mobileVerifiedAt: Date | null;
 }) {
   return {
     commuterId: commuter.commuterId,
@@ -32,16 +34,18 @@ function toPublicCommuter(commuter: {
     mobileNumber: commuter.mobileNumber,
     dateOfBirth: commuter.dateOfBirth,
     photoUrl: commuter.photoUrl,
+    mobileVerifiedAt: commuter.mobileVerifiedAt,
   };
 }
 
 export const authCommuterRouter = Router();
 
 /**
- * No phone-OTP gate here — in the client, the screen right after signup is
- * CommuterVerificationScreen (government ID + face verification), not an
- * OTP entry screen. So the account is usable immediately and this returns
- * a session token straight away, same as /login.
+ * The account is created and a session token issued immediately (same as
+ * /login) so the client isn't blocked waiting on the OTP step — but the
+ * client's next screen is CommuterOtpVerificationScreen, so a
+ * SIGNUP_VERIFICATION OTP is also fired here for it to check against
+ * /verify-signup-otp before moving on to ID + face verification.
  */
 authCommuterRouter.post(
   '/signup',
@@ -71,8 +75,52 @@ authCommuterRouter.post(
       },
     });
 
+    await issueOtp(mobileNumber, 'SIGNUP_VERIFICATION');
+
     const token = signAuthToken({ sub: commuter.id, role: 'commuter' });
     res.status(201).json({ token, commuter: toPublicCommuter(commuter) });
+  }),
+);
+
+authCommuterRouter.post(
+  '/verify-signup-otp',
+  validateBody(verifyOtpSchema),
+  asyncHandler(async (req, res) => {
+    const mobileNumber = toE164((req.body as { mobileNumber: string }).mobileNumber);
+    const { code } = req.body as { code: string };
+
+    const commuter = await prisma.commuter.findUnique({ where: { mobileNumber } });
+    if (!commuter) {
+      throw new ApiError(404, 'not_found', 'No account for this mobile number');
+    }
+
+    const ok = await verifyOtp(mobileNumber, 'SIGNUP_VERIFICATION', code);
+    if (!ok) {
+      throw new ApiError(400, 'invalid_otp', 'That code is invalid or expired');
+    }
+
+    const updated = await prisma.commuter.update({
+      where: { id: commuter.id },
+      data: { mobileVerifiedAt: new Date() },
+    });
+
+    res.json({ commuter: toPublicCommuter(updated) });
+  }),
+);
+
+authCommuterRouter.post(
+  '/resend-signup-otp',
+  validateBody(resendSignupOtpSchema),
+  asyncHandler(async (req, res) => {
+    const mobileNumber = toE164((req.body as { mobileNumber: string }).mobileNumber);
+
+    const commuter = await prisma.commuter.findUnique({ where: { mobileNumber } });
+    if (!commuter) {
+      throw new ApiError(404, 'not_found', 'No account for this mobile number');
+    }
+
+    await issueOtp(mobileNumber, 'SIGNUP_VERIFICATION');
+    res.json({ mobileNumber, message: 'A verification code was sent to your mobile number.' });
   }),
 );
 

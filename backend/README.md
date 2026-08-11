@@ -69,14 +69,16 @@ All bodies are JSON. Mobile numbers accept either `09XXXXXXXXX` or
 
 ### Commuter (`/auth/commuter`)
 
-| Method | Path                | Body                                              | Notes |
-|--------|---------------------|----------------------------------------------------|-------|
-| POST   | `/signup`           | `fullName, mobileNumber, password, dateOfBirth?`   | No phone-OTP gate — returns `{ token, commuter }` immediately. In the client, the screen right after signup is ID + face verification (KYC), not an OTP screen, so there's nothing to gate login on here. |
-| POST   | `/login`            | `mobileNumber, password`                           | Returns `{ token, commuter }` |
-| POST   | `/forgot-password`  | `mobileNumber`                                     | Sends a password-reset OTP |
-| POST   | `/verify-reset-otp` | `mobileNumber, code`                               | Returns a short-lived `{ resetToken }` (10 min) |
-| POST   | `/reset-password`   | `resetToken, newPassword`                          | |
-| GET    | `/me`                | — (`Authorization: Bearer <token>`)               | Current commuter profile |
+| Method | Path                  | Body                                              | Notes |
+|--------|-----------------------|----------------------------------------------------|-------|
+| POST   | `/signup`             | `fullName, mobileNumber, password, dateOfBirth?`   | Returns `{ token, commuter }` immediately (not blocked on OTP) and also fires a `SIGNUP_VERIFICATION` OTP. The client's next screen is `CommuterOtpVerificationScreen`, which must clear `/verify-signup-otp` before moving on to ID + face verification. |
+| POST   | `/verify-signup-otp`  | `mobileNumber, code`                               | Marks the account's `mobileVerifiedAt`. Returns `{ commuter }` |
+| POST   | `/resend-signup-otp`  | `mobileNumber`                                     | Re-sends the signup OTP |
+| POST   | `/login`              | `mobileNumber, password`                           | Returns `{ token, commuter }` |
+| POST   | `/forgot-password`    | `mobileNumber`                                     | Sends a password-reset OTP |
+| POST   | `/verify-reset-otp`   | `mobileNumber, code`                               | Returns a short-lived `{ resetToken }` (10 min) |
+| POST   | `/reset-password`     | `resetToken, newPassword`                          | |
+| GET    | `/me`                 | — (`Authorization: Bearer <token>`)               | Current commuter profile |
 
 ### Driver (`/auth/driver`)
 
@@ -99,19 +101,26 @@ spaces, upper+lower+digit+special char`) — re-checked server-side in
 
 ### OTP in local dev
 
-There's no SMS gateway wired up. Every password-reset OTP is printed to
-the server console instead (`[OTP] PASSWORD_RESET code for +639...: 123456
-...`) — read it from there while testing the forgot-password flow.
+There's no SMS gateway wired up. Every OTP (signup verification and
+password reset alike) is printed to the server console instead
+(`[OTP] SIGNUP_VERIFICATION code for +639...: 123456 ...`) — read it from
+there while testing.
 
 ## Trying it end-to-end
 
 ```sh
-# 1. Sign up (already logged in — no OTP step)
+# 1. Sign up — returns a token right away, and logs a SIGNUP_VERIFICATION
+#    OTP to the server console
 curl -X POST http://localhost:4000/auth/commuter/signup \
   -H "Content-Type: application/json" \
   -d '{"fullName":"Test User","mobileNumber":"09171234567","password":"Str0ng!Pass"}'
 
-# 2. Log in
+# 2. Verify the OTP printed in the server console
+curl -X POST http://localhost:4000/auth/commuter/verify-signup-otp \
+  -H "Content-Type: application/json" \
+  -d '{"mobileNumber":"09171234567","code":"123456"}'
+
+# 3. Log in
 curl -X POST http://localhost:4000/auth/commuter/login \
   -H "Content-Type: application/json" \
   -d '{"mobileNumber":"09171234567","password":"Str0ng!Pass"}'

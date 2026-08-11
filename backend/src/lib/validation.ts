@@ -44,6 +44,10 @@ export const forgotPasswordSchema = z.object({
   mobileNumber: mobileNumberSchema,
 });
 
+export const resendSignupOtpSchema = z.object({
+  mobileNumber: mobileNumberSchema,
+});
+
 export const resetPasswordSchema = z.object({
   resetToken: z.string().min(1),
   newPassword: passwordSchema,

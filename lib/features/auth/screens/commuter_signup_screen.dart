@@ -6,7 +6,7 @@ import '../../../core/services/auth_api.dart';
 import '../../../core/services/user_session.dart';
 import '../../../core/utils/phone_utils.dart';
 import 'commuter_login_screen.dart';
-import 'commuter_verification_screen.dart';
+import 'commuter_otp_verification_screen.dart';
 import 'role_selection_screen.dart';
 
 class CommuterSignUpScreen extends StatefulWidget {
@@ -166,7 +166,9 @@ class _CommuterSignUpScreenState extends State<CommuterSignUpScreen> {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (context) => const CommuterVerificationScreen(),
+          builder: (context) => CommuterOtpVerificationScreen(
+            mobileNumber: normalizedPhone,
+          ),
         ),
       );
     } on ApiException catch (e) {
