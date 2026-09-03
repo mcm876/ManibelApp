@@ -94,9 +94,23 @@ class _InAppCameraScreenState extends State<_InAppCameraScreen> {
   // --- Liveness (see InAppCameraCapture.capture's requireLiveness doc) ---
   FaceDetector? _faceDetector;
   bool _isProcessingFrame = false; // drops a frame rather than queueing behind a slow one
-  bool _eyesSeenClosed = false; // becomes true once a frame reads both eyes as closed
+  bool _eyesSeenClosed = false; // becomes true once a run of frames reads both eyes as closed
   bool _livenessConfirmed = false;
   Timer? _livenessTimeoutTimer;
+  DateTime? _streamStartedAt;
+  // Auto-exposure/focus is still ramping up for the first several frames
+  // after the stream starts, which routinely under/over-exposes those
+  // frames and gets them misread as "eyes closed" — without this, that
+  // noise alone reads as a completed blink the instant the camera opens,
+  // before the user has done anything (confirmed against a real device:
+  // capture fired immediately, with eyes open the whole time).
+  static const _exposureWarmUp = Duration(milliseconds: 800);
+  // Requiring a run of consecutive frames (rather than any single frame)
+  // to confirm each half of the blink filters the same kind of transient
+  // misread anywhere else in the stream, not just during warm-up.
+  static const _framesToConfirm = 2;
+  int _closedStreak = 0;
+  int _openStreak = 0;
   // After this long without a detected blink, reveal a manual fallback —
   // never leave someone permanently stuck behind a check that isn't
   // working for them (bad lighting, a face shape the model reads
@@ -178,6 +192,7 @@ class _InAppCameraScreenState extends State<_InAppCameraScreen> {
       _faceDetector = FaceDetector(
         options: FaceDetectorOptions(enableClassification: true, performanceMode: FaceDetectorMode.fast),
       );
+      _streamStartedAt = DateTime.now();
       await controller.startImageStream(_processCameraImage);
       _livenessTimeoutTimer = Timer(_livenessTimeout, () {
         if (!mounted || _livenessConfirmed) return;
@@ -191,6 +206,8 @@ class _InAppCameraScreenState extends State<_InAppCameraScreen> {
 
   Future<void> _processCameraImage(CameraImage image) async {
     if (_isProcessingFrame || _livenessConfirmed || !mounted) return;
+    final startedAt = _streamStartedAt;
+    if (startedAt != null && DateTime.now().difference(startedAt) < _exposureWarmUp) return;
     _isProcessingFrame = true;
     try {
       final controller = _controller;
@@ -210,15 +227,19 @@ class _InAppCameraScreenState extends State<_InAppCameraScreen> {
       final avgOpen = (leftOpen + rightOpen) / 2;
 
       if (!_eyesSeenClosed) {
-        if (avgOpen < 0.35) _eyesSeenClosed = true;
-      } else if (avgOpen > 0.65) {
-        // Eyes were closed on an earlier frame and are open again now —
-        // a completed blink. Stop watching the stream and capture
-        // immediately, same as a manual shutter tap.
-        _livenessConfirmed = true;
-        unawaited(_finishLivenessCheck());
-        if (mounted) setState(() {});
-        unawaited(_handleCapture());
+        _closedStreak = avgOpen < 0.35 ? _closedStreak + 1 : 0;
+        if (_closedStreak >= _framesToConfirm) _eyesSeenClosed = true;
+      } else {
+        _openStreak = avgOpen > 0.65 ? _openStreak + 1 : 0;
+        if (_openStreak >= _framesToConfirm) {
+          // Eyes were closed over the preceding frames and have been open
+          // again for several more — a completed blink. Stop watching the
+          // stream and capture immediately, same as a manual shutter tap.
+          _livenessConfirmed = true;
+          unawaited(_finishLivenessCheck());
+          if (mounted) setState(() {});
+          unawaited(_handleCapture());
+        }
       }
     } catch (_) {
       // A single bad frame isn't fatal — the next one just gets tried
