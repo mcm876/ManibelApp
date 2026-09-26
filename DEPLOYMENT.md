@@ -42,7 +42,7 @@ PostgreSQL on **Neon** (serverless Postgres).
 | Piece | Where | Notes |
 |---|---|---|
 | Admin dashboard | **Vercel** | `admin/vercel.json` (SPA rewrite). Auto-deploys on push to `main`. |
-| Mobile app | GitHub Releases (`latest`), not the Play Store | Built by `.github/workflows/build-apk.yml` on every push to `main`; signed with the `ANDROID_KEYSTORE_BASE64`/`ANDROID_KEYSTORE_PASSWORD`/`ANDROID_KEY_PASSWORD`/`ANDROID_KEY_ALIAS` repo secrets. |
+| Mobile app | GitHub Releases (`latest`), not the Play Store | Built by `.github/workflows/build-apk.yml` on every push to `main`; signed with the `ANDROID_KEYSTORE_BASE64`/`ANDROID_KEYSTORE_PASSWORD`/`ANDROID_KEY_PASSWORD`/`ANDROID_KEY_ALIAS` repo secrets, plus `MAPBOX_ACCESS_TOKEN` (a Mapbox *public* `pk.` token, baked in via `--dart-define`) — without it the app's map tiles come back 401 and the map is blank (markers still show). |
 | Backend API (`api.manibelaapp.com`) | **Render** | No `render.yaml` in the repo — configured via Render's own dashboard/GitHub integration, not repo config. |
 | Landing page | **Vercel** | Same platform as the admin dashboard, separate project. |
 | Database | Neon | Managed Postgres; `DATABASE_URL` in `backend/.env`. |
