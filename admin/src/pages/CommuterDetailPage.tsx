@@ -4,6 +4,7 @@ import { DashboardLayout } from '../components/DashboardLayout';
 import { Card, SectionHeader } from '../components/Card';
 import { VerificationBadge, type VerificationStatus } from '../components/VerificationBadge';
 import { CommuterRideHistorySection } from '../components/CommuterRideHistorySection';
+import { IdChecksCard } from '../components/IdChecksCard';
 import { apiClient, ApiError } from '../lib/apiClient';
 import { formatPhone } from '../lib/formatPhone';
 
@@ -19,6 +20,9 @@ interface CommuterDetail {
   idFrontUrl: string | null;
   idBackUrl: string | null;
   selfieUrl: string | null;
+  idBirthDate: string | null;
+  idExpiryDate: string | null;
+  reviewReasons: string[];
   verificationStatus: VerificationStatus;
   isActive: boolean;
   totalSignals: number;
@@ -229,6 +233,17 @@ export default function CommuterDetailPage() {
           </div>
 
           {actionError && <p className="mt-2 text-sm font-medium text-brand-red">{actionError}</p>}
+
+          {commuter.idFrontUrl && (
+            <div className="max-w-xl">
+              <IdChecksCard
+                idBirthDate={commuter.idBirthDate}
+                idExpiryDate={commuter.idExpiryDate}
+                signupBirthDate={commuter.dateOfBirth}
+                reviewReasons={commuter.reviewReasons}
+              />
+            </div>
+          )}
 
           <div className="mt-4 grid grid-cols-1 gap-6 sm:grid-cols-3">
             <PhotoTile label="ID Front" url={commuter.idFrontUrl} />

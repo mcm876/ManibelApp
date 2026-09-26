@@ -1114,6 +1114,12 @@ router.get('/commuters/:id', requireAuth('admin'), async (req, res, next) => {
         idBackUrl: commuter.idBackUrl,
         selfieUrl: commuter.selfieUrl,
         faceMatchScore: commuter.faceMatchScore,
+        // What the app read off the ID (null = unreadable / submitted
+        // before these checks existed) and why the account wasn't
+        // auto-approved — shown in the admin's "ID Checks" card.
+        idBirthDate: commuter.idBirthDate ? formatDateOnly(commuter.idBirthDate) : null,
+        idExpiryDate: commuter.idExpiryDate ? formatDateOnly(commuter.idExpiryDate) : null,
+        reviewReasons: commuter.reviewReasons,
         verificationStatus: commuter.verificationStatus,
         isActive: commuter.isActive,
         totalSignals,

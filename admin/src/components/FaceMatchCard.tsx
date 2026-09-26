@@ -1,7 +1,7 @@
 // Mirrors FACE_MATCH_AUTO_CLEAR_SCORE in backend/src/lib/faceMatch.ts — the
 // score at/above which a signup/license submission auto-clears without an
 // admin ever seeing it. Keep these two in sync if that threshold changes.
-const FACE_MATCH_AUTO_CLEAR_SCORE = 70;
+const FACE_MATCH_AUTO_CLEAR_SCORE = 50;
 
 /** Shows the automated selfie-vs-document face-match result on a detail
  * panel — used by both CommuterDetailPanel (selfie vs. ID front) and

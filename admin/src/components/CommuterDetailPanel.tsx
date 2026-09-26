@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { VerificationBadge, type VerificationStatus } from './VerificationBadge';
 import { CommuterRideHistorySection } from './CommuterRideHistorySection';
 import { FaceMatchCard } from './FaceMatchCard';
+import { IdChecksCard } from './IdChecksCard';
 import { PhotoAccessLogNote, type PhotoAccessLogEntry } from './PhotoAccessLogNote';
 import { apiClient, ApiError } from '../lib/apiClient';
 import { formatManilaDate } from '../lib/formatDate';
@@ -20,6 +21,9 @@ interface CommuterDetail {
   idBackUrl: string | null;
   selfieUrl: string | null;
   faceMatchScore: number | null;
+  idBirthDate: string | null;
+  idExpiryDate: string | null;
+  reviewReasons: string[];
   verificationStatus: VerificationStatus;
   isActive: boolean;
   totalSignals: number;
@@ -299,6 +303,14 @@ export function CommuterDetailPanel({
               </div>
               {actionError && <p className="mt-2 text-xs font-medium text-brand-red">{actionError}</p>}
               {commuter.idFrontUrl && <FaceMatchCard score={commuter.faceMatchScore} documentLabel="ID Front" />}
+              {commuter.idFrontUrl && (
+                <IdChecksCard
+                  idBirthDate={commuter.idBirthDate}
+                  idExpiryDate={commuter.idExpiryDate}
+                  signupBirthDate={commuter.dateOfBirth}
+                  reviewReasons={commuter.reviewReasons}
+                />
+              )}
               <div className="mt-3 grid grid-cols-2 gap-3">
                 <PhotoTile label="ID Front" url={commuter.idFrontUrl} />
                 <PhotoTile label="ID Back" url={commuter.idBackUrl} />
