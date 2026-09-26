@@ -44,6 +44,53 @@ class ApiClient {
     return _send('POST', path, body: body, token: token);
   }
 
+  /// Multipart form upload: [fields] as text parts, [files] as
+  /// name -> local path file parts.
+  Future<Map<String, dynamic>> postMultipart(
+    String path, {
+    required Map<String, String> fields,
+    required Map<String, String> files,
+    String? token,
+  }) async {
+    final request = http.MultipartRequest('POST', Uri.parse('$_baseUrl$path'))
+      ..fields.addAll(fields)
+      ..headers.addAll({if (token != null) 'Authorization': 'Bearer $token'});
+    for (final entry in files.entries) {
+      request.files.add(
+        await http.MultipartFile.fromPath(entry.key, entry.value),
+      );
+    }
+
+    final http.Response response;
+    try {
+      response = await http.Response.fromStream(await request.send());
+    } catch (_) {
+      throw const ApiException(
+        statusCode: 0,
+        code: 'network_error',
+        message:
+            "Couldn't reach the server. Check your connection and try again.",
+      );
+    }
+    return _decode(response);
+  }
+
+  Map<String, dynamic> _decode(http.Response response) {
+    final Map<String, dynamic> decoded = response.body.isEmpty
+        ? <String, dynamic>{}
+        : jsonDecode(response.body) as Map<String, dynamic>;
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return decoded;
+    }
+
+    throw ApiException(
+      statusCode: response.statusCode,
+      code: (decoded['error'] as String?) ?? 'unknown_error',
+      message: _errorMessage(decoded),
+    );
+  }
+
   Future<Map<String, dynamic>> _send(
     String method,
     String path, {
@@ -69,23 +116,12 @@ class ApiClient {
       throw const ApiException(
         statusCode: 0,
         code: 'network_error',
-        message: "Couldn't reach the server. Check your connection and try again.",
+        message:
+            "Couldn't reach the server. Check your connection and try again.",
       );
     }
 
-    final Map<String, dynamic> decoded = response.body.isEmpty
-        ? <String, dynamic>{}
-        : jsonDecode(response.body) as Map<String, dynamic>;
-
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      return decoded;
-    }
-
-    throw ApiException(
-      statusCode: response.statusCode,
-      code: (decoded['error'] as String?) ?? 'unknown_error',
-      message: _errorMessage(decoded),
-    );
+    return _decode(response);
   }
 
   String _errorMessage(Map<String, dynamic> decoded) {

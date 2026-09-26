@@ -12,17 +12,31 @@ enum OtpPurpose {
   SIGNUP_VERIFICATION
 }
 
+enum IdVerificationStatus {
+  NONE
+  PENDING_REVIEW
+  VERIFIED
+}
+
+enum IdSubmissionStatus {
+  APPROVED
+  PENDING_REVIEW
+  REJECTED
+}
+
 model Commuter {
-  id               String    @id @default(cuid())
-  commuterId       String    @unique
-  fullName         String
-  mobileNumber     String    @unique
-  passwordHash     String
-  dateOfBirth      DateTime?
-  photoUrl         String?
-  mobileVerifiedAt DateTime?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  id                   String               @id @default(cuid())
+  commuterId           String               @unique
+  fullName             String
+  mobileNumber         String               @unique
+  passwordHash         String
+  dateOfBirth          DateTime?
+  photoUrl             String?
+  mobileVerifiedAt     DateTime?
+  idVerificationStatus IdVerificationStatus @default(NONE)
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  idSubmissions        IdSubmission[]
 }
 
 model Driver {
@@ -47,4 +61,40 @@ model OtpCode {
   createdAt    DateTime   @default(now())
 
   @@index([mobileNumber, purpose])
+}
+
+/// Accepted government ID types. The app fetches this list instead of
+/// hardcoding it, so types can be added/disabled without an app release.
+model GovernmentIdType {
+  id           String         @id @default(cuid())
+  code         String         @unique
+  label        String
+  hasExpiry    Boolean        @default(true)
+  requiresBack Boolean        @default(true)
+  active       Boolean        @default(true)
+  sortOrder    Int            @default(0)
+  submissions  IdSubmission[]
+}
+
+model IdSubmission {
+  id              String             @id @default(cuid())
+  commuterId      String
+  commuter        Commuter           @relation(fields: [commuterId], references: [id])
+  idTypeId        String
+  idType          GovernmentIdType   @relation(fields: [idTypeId], references: [id])
+  birthDate       DateTime?
+  expiryDate      DateTime?
+  faceMatchScore  Float?
+  status          IdSubmissionStatus
+  /// Machine-readable reasons this needs a human, e.g. FACE_NOT_MATCHED.
+  reviewReasons   String[]
+  frontPath       String
+  backPath        String?
+  selfiePath      String
+  /// Set when an admin rejects a PENDING_REVIEW submission.
+  rejectionReason String?
+  reviewedAt      DateTime?
+  createdAt       DateTime           @default(now())
+
+  @@index([commuterId])
 }

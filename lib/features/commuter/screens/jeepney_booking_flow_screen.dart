@@ -8,6 +8,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../../core/constants/app_colors.dart';
+import '../../../core/data/jeepney_routes.dart';
 import '../../../core/utils/fare_calculator.dart';
 import 'commuter_history_screen.dart';
 import 'notifications_screen.dart';
@@ -174,10 +175,7 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen> {
     }
   }
 
-  static const _routes = [
-    'Pasig - Quiapo',
-    'Quiapo - Pasig',
-  ];
+  static final _routes = JeepneyRoutes.names;
 
   static const _availableJeepneys = [
     _JeepneyOption(
@@ -811,7 +809,7 @@ class _RouteAndCompanionsStepState extends State<_RouteAndCompanionsStep> {
               isDense: true,
               border: InputBorder.none,
               contentPadding: EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-              hintText: 'e.g. Pasig - Quiapo',
+              hintText: 'e.g. Pasig – Quiapo',
               hintStyle: TextStyle(fontSize: 13, color: Colors.black38),
               prefixIcon: Icon(Icons.search, size: 20, color: Colors.black45),
               suffixIcon: Icon(Icons.expand_more_rounded, color: Colors.black45),
@@ -1000,15 +998,33 @@ class _RouteCard extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text(
-                    route,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: selected ? _kBlueDark : Colors.black87,
-                    ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        route,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: selected ? _kBlueDark : Colors.black87,
+                        ),
+                      ),
+                      if (JeepneyRoutes.byName(route) != null)
+                        Text(
+                          JeepneyRoutes.byName(route)!.terminalsLabel,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.black54,
+                            height: 1.2,
+                          ),
+                        ),
+                    ],
                   ),
                 ),
                 if (selected)

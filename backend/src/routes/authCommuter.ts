@@ -27,6 +27,7 @@ function toPublicCommuter(commuter: {
   dateOfBirth: Date | null;
   photoUrl: string | null;
   mobileVerifiedAt: Date | null;
+  idVerificationStatus: string;
 }) {
   return {
     commuterId: commuter.commuterId,
@@ -35,6 +36,7 @@ function toPublicCommuter(commuter: {
     dateOfBirth: commuter.dateOfBirth,
     photoUrl: commuter.photoUrl,
     mobileVerifiedAt: commuter.mobileVerifiedAt,
+    idVerificationStatus: commuter.idVerificationStatus,
   };
 }
 

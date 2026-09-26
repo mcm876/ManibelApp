@@ -3,13 +3,11 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../../core/constants/app_colors.dart';
+import '../../../core/data/jeepney_routes.dart';
 import '../../../core/services/driver_session.dart';
 
 /// The only two routes this fleet actually services.
-const List<String> kDriverRoutes = [
-  'Pasig – Quiapo',
-  'Quiapo – Pasig',
-];
+final List<String> kDriverRoutes = JeepneyRoutes.names;
 
 class DriverStartTripResult {
   final String route;

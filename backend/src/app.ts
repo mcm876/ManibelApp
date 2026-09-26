@@ -1,6 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import { authCommuterRouter } from './routes/authCommuter';
+import { adminIdReviewRouter } from './routes/adminIdReview';
+import { idVerificationRouter } from './routes/idVerification';
 import { authDriverRouter } from './routes/authDriver';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 
@@ -13,6 +15,8 @@ export function createApp() {
   app.get('/health', (_req, res) => res.json({ ok: true }));
 
   app.use('/auth/commuter', authCommuterRouter);
+  app.use('/auth/commuter', idVerificationRouter);
+  app.use('/admin/id-submissions', adminIdReviewRouter);
   app.use('/auth/driver', authDriverRouter);
 
   app.use(notFoundHandler);

@@ -3,18 +3,38 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../../core/constants/app_colors.dart';
+import '../../../core/network/api_exception.dart';
+import '../../../core/services/auth_api.dart';
+import '../../../core/services/id_date_parser.dart';
+import '../../../core/services/user_session.dart';
+import 'commuter_pending_review_screen.dart';
 import 'commuter_verified_screen.dart';
 
 class CommuterFaceVerificationScreen extends StatefulWidget {
-  const CommuterFaceVerificationScreen({super.key, required this.idType});
+  const CommuterFaceVerificationScreen({
+    super.key,
+    required this.idType,
+    required this.frontImage,
+    this.backImage,
+    this.birthDate,
+    this.expiryDate,
+  });
 
-  final String idType;
+  final GovernmentIdType idType;
+  final File frontImage;
+  final File? backImage;
+
+  /// Dates the app read off the ID; null when they couldn't be read.
+  final DateTime? birthDate;
+  final DateTime? expiryDate;
 
   @override
-  State<CommuterFaceVerificationScreen> createState() => _CommuterFaceVerificationScreenState();
+  State<CommuterFaceVerificationScreen> createState() =>
+      _CommuterFaceVerificationScreenState();
 }
 
-class _CommuterFaceVerificationScreenState extends State<CommuterFaceVerificationScreen> {
+class _CommuterFaceVerificationScreenState
+    extends State<CommuterFaceVerificationScreen> {
   final ImagePicker _picker = ImagePicker();
 
   File? _capturedPhoto;
@@ -85,17 +105,37 @@ class _CommuterFaceVerificationScreenState extends State<CommuterFaceVerificatio
     });
 
     try {
-      // TODO: replace with the real face-match verification call. The
-      // captured selfie is available at _capturedPhoto for that request.
-      await Future<void>.delayed(const Duration(milliseconds: 1000));
+      final result = await AuthApi.verifyId(
+        token: UserSession.instance.token ?? '',
+        idTypeCode: widget.idType.code,
+        frontPath: widget.frontImage.path,
+        backPath: widget.backImage?.path,
+        selfiePath: _capturedPhoto!.path,
+        birthDate: widget.birthDate == null
+            ? null
+            : toIsoDate(widget.birthDate!),
+        expiryDate: widget.expiryDate == null
+            ? null
+            : toIsoDate(widget.expiryDate!),
+      );
       if (!mounted) return;
 
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) => CommuterVerifiedScreen(idType: widget.idType),
+          builder: (_) => result.approved
+              ? CommuterVerifiedScreen(idType: widget.idType.label)
+              : CommuterPendingReviewScreen(
+                  reviewReasons: result.reviewReasons,
+                ),
         ),
       );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isProcessing = false;
+        _error = e.message;
+      });
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -115,7 +155,11 @@ class _CommuterFaceVerificationScreenState extends State<CommuterFaceVerificatio
         foregroundColor: Colors.black87,
         title: const Text(
           'Face Verification',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Colors.black),
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+            color: Colors.black,
+          ),
         ),
       ),
       body: SafeArea(
@@ -128,7 +172,11 @@ class _CommuterFaceVerificationScreenState extends State<CommuterFaceVerificatio
                     ? 'Review your photo before confirming'
                     : 'Position your face within the frame and hold still',
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.black54),
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black54,
+                ),
               ),
               const SizedBox(height: 28),
               Expanded(
@@ -145,7 +193,11 @@ class _CommuterFaceVerificationScreenState extends State<CommuterFaceVerificatio
                   child: Text(
                     _error!,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFFE23F3F)),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFFE23F3F),
+                    ),
                   ),
                 ),
               if (!_isCaptured)
@@ -155,20 +207,31 @@ class _CommuterFaceVerificationScreenState extends State<CommuterFaceVerificatio
                     onPressed: _isProcessing ? null : _handleCapture,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
-                      disabledBackgroundColor: AppColors.primary.withOpacity(0.6),
+                      disabledBackgroundColor: AppColors.primary.withOpacity(
+                        0.6,
+                      ),
                       padding: const EdgeInsets.symmetric(vertical: 15),
                       elevation: 0,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
                     ),
                     child: _isProcessing
                         ? const SizedBox(
                             width: 20,
                             height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2.4, color: AppColors.onPrimary),
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.4,
+                              color: AppColors.onPrimary,
+                            ),
                           )
                         : const Text(
                             'Capture',
-                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: AppColors.onPrimary),
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.onPrimary,
+                            ),
                           ),
                   ),
                 )
@@ -181,11 +244,17 @@ class _CommuterFaceVerificationScreenState extends State<CommuterFaceVerificatio
                         style: OutlinedButton.styleFrom(
                           side: const BorderSide(color: AppColors.logoBlue),
                           padding: const EdgeInsets.symmetric(vertical: 15),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
                         ),
                         child: const Text(
                           'Retake',
-                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: AppColors.logoBlue),
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.logoBlue,
+                          ),
                         ),
                       ),
                     ),
@@ -195,20 +264,30 @@ class _CommuterFaceVerificationScreenState extends State<CommuterFaceVerificatio
                         onPressed: _isProcessing ? null : _handleConfirm,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppColors.primary,
-                          disabledBackgroundColor: AppColors.primary.withOpacity(0.6),
+                          disabledBackgroundColor: AppColors.primary
+                              .withOpacity(0.6),
                           padding: const EdgeInsets.symmetric(vertical: 15),
                           elevation: 0,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
                         ),
                         child: _isProcessing
                             ? const SizedBox(
                                 width: 20,
                                 height: 20,
-                                child: CircularProgressIndicator(strokeWidth: 2.4, color: AppColors.onPrimary),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.4,
+                                  color: AppColors.onPrimary,
+                                ),
                               )
                             : const Text(
                                 'Confirm',
-                                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: AppColors.onPrimary),
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w800,
+                                  color: AppColors.onPrimary,
+                                ),
                               ),
                       ),
                     ),
@@ -242,10 +321,7 @@ class _FaceFrame extends StatelessWidget {
           decoration: BoxDecoration(
             color: isCaptured ? AppColors.qrTileBg : const Color(0xFFECEDEF),
             borderRadius: BorderRadius.circular(140),
-            border: Border.all(
-              color: AppColors.primary,
-              width: 3,
-            ),
+            border: Border.all(color: AppColors.primary, width: 3),
           ),
           child: isCaptured
               ? Stack(
@@ -261,7 +337,11 @@ class _FaceFrame extends StatelessWidget {
                           color: AppColors.primary,
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(Icons.check_rounded, size: 18, color: AppColors.onPrimary),
+                        child: const Icon(
+                          Icons.check_rounded,
+                          size: 18,
+                          color: AppColors.onPrimary,
+                        ),
                       ),
                     ),
                   ],
@@ -273,7 +353,10 @@ class _FaceFrame extends StatelessWidget {
                 ),
         ),
         if (isProcessing)
-          const CircularProgressIndicator(strokeWidth: 2.4, color: AppColors.primary),
+          const CircularProgressIndicator(
+            strokeWidth: 2.4,
+            color: AppColors.primary,
+          ),
       ],
     );
   }
