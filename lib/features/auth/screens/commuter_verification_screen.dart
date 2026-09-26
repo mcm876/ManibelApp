@@ -4,17 +4,10 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/api_client.dart';
+import '../../../core/services/id_date_parser.dart';
+import '../../../core/services/id_verification.dart';
 import '../../../core/widgets/in_app_camera_capture.dart';
 import 'commuter_face_verification_screen.dart';
-
-const List<String> _idTypeOptions = [
-  'Philippine National ID (PhilSys)',
-  "Driver's License",
-  'Passport',
-  'UMID',
-  "Voter's ID",
-  'Postal ID',
-];
 
 // Matches the backend's multer limit (uploadIdPhotos) — checked
 // client-side too so a too-large pick fails fast with a clear message
@@ -37,6 +30,11 @@ class CommuterVerificationScreen extends StatefulWidget {
 }
 
 class _CommuterVerificationScreenState extends State<CommuterVerificationScreen> {
+  // The accepted ID types come from the backend, not a hardcoded list.
+  List<GovernmentIdType> _idTypes = const [];
+  bool _isLoadingTypes = true;
+  String? _typesError;
+
   String? _selectedId;
   File? _frontImage;
   File? _backImage;
@@ -50,6 +48,42 @@ class _CommuterVerificationScreenState extends State<CommuterVerificationScreen>
   String? _ageError;
 
   bool get _canUploadId => _selectedId != null;
+
+  bool get _selectedHasExpiry =>
+      _idTypes.where((t) => t.label == _selectedId).firstOrNull?.hasExpiry ?? true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadIdTypes();
+  }
+
+  Future<void> _loadIdTypes() async {
+    setState(() {
+      _isLoadingTypes = true;
+      _typesError = null;
+    });
+    try {
+      final types = await IdVerification.fetchIdTypes();
+      if (!mounted) return;
+      setState(() {
+        _idTypes = types;
+        _isLoadingTypes = false;
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _typesError = e.message;
+        _isLoadingTypes = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _typesError = "Couldn't load the ID types. Please try again.";
+        _isLoadingTypes = false;
+      });
+    }
+  }
 
   void _handleIdTypeChanged(String? value) {
     setState(() {
@@ -156,13 +190,27 @@ class _CommuterVerificationScreenState extends State<CommuterVerificationScreen>
     setState(() => _isVerifying = true);
 
     try {
+      // Read the birth/expiry dates off the ID on-device and stop here if
+      // it's expired or the holder is under 18 — the backend re-checks.
+      final IdDates dates = await IdVerification.readDates([_frontImage!, _backImage!]);
+      if (!mounted) return;
+      final rejection = IdVerification.rejectionMessage(dates, hasExpiry: _selectedHasExpiry);
+      if (rejection != null) {
+        setState(() => _frontError = rejection);
+        return;
+      }
+
       await ApiClient.uploadFiles(
         '/api/commuter/signup/${widget.signupTicket}/id-photos',
         files: {
           'front': _frontImage!.path,
           'back': _backImage!.path,
         },
-        fields: {'idType': _selectedId!},
+        fields: {
+          'idType': _selectedId!,
+          if (dates.birthDate != null) 'birthDate': toIsoDate(dates.birthDate!),
+          if (dates.expiryDate != null) 'expiryDate': toIsoDate(dates.expiryDate!),
+        },
       );
       if (!mounted) return;
 
@@ -269,10 +317,27 @@ class _CommuterVerificationScreenState extends State<CommuterVerificationScreen>
                 errorText: _idError,
                 errorStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFFE23F3F)),
               ),
-              items: _idTypeOptions
-                  .map((label) => DropdownMenuItem(value: label, child: Text(label)))
+              items: _idTypes
+                  .map((t) => DropdownMenuItem(value: t.label, child: Text(t.label)))
                   .toList(),
             ),
+            if (_isLoadingTypes)
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: LinearProgressIndicator(minHeight: 2),
+              ),
+            if (_typesError != null)
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _typesError!,
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFFE23F3F)),
+                    ),
+                  ),
+                  TextButton(onPressed: _loadIdTypes, child: const Text('Retry')),
+                ],
+              ),
             const SizedBox(height: 20),
             const Text(
               'Upload ID Photos',

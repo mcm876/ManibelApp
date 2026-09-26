@@ -80,6 +80,21 @@ model Commuter {
   /// once set; an admin's later APPROVED/REJECTED call doesn't touch it.
   faceMatchScore  Int?
 
+  /// Birth date and expiry date the app read off the ID photo (on-device
+  /// OCR) — null when unreadable. An ID that is expired, or shows an age
+  /// under MIN_ADULT_AGE, is rejected outright before it gets here (see
+  /// lib/idChecks.ts); these are kept so the admin reviewing a PENDING
+  /// account can see what was read.
+  idBirthDate     DateTime? @db.Date
+  idExpiryDate    DateTime? @db.Date
+
+  /// Why this account couldn't be auto-approved and is waiting on a human
+  /// (FACE_NOT_MATCHED, FACE_UNVERIFIED, BIRTH_DATE_MISMATCH,
+  /// BIRTH_DATE_UNREADABLE, EXPIRY_DATE_UNREADABLE — see lib/idChecks.ts).
+  /// Empty when auto-approved or nothing has been submitted. Returned by
+  /// GET /verification-status so the commuter is told what happened.
+  reviewReasons   String[]  @default([])
+
   /// Null until ID/selfie is submitted (nothing to review yet); set at
   /// /signup to APPROVED (auto-cleared, see FACE_MATCH_AUTO_CLEAR_SCORE
   /// in lib/faceMatch.ts) or PENDING (below threshold / no score),
@@ -449,6 +464,10 @@ model PendingCommuterSignup {
   idBackUrl    String?
   selfieUrl    String?
 
+  /// Dates the app read off the ID (see Commuter.idBirthDate).
+  idBirthDate  DateTime? @db.Date
+  idExpiryDate DateTime? @db.Date
+
   expiresAt    DateTime
   createdAt    DateTime @default(now())
 }
@@ -614,4 +633,19 @@ model DriverDailyLog {
 
   @@unique([driverId, date])
   @@index([driverId, date])
+}
+
+/// Government ID types the app offers during commuter verification. The app
+/// fetches these (GET /api/commuter/id-types) instead of hardcoding a list,
+/// so a type can be added, renamed or switched off without an app release.
+/// Commuter.idType stores the [label] the commuter picked.
+model GovernmentIdType {
+  id        String  @id @default(cuid())
+  label     String  @unique
+  /// Whether this ID prints an expiry date. When true, an expired ID is
+  /// rejected and an unreadable expiry date sends the account to manual
+  /// review; when false (e.g. PhilSys) expiry isn't checked.
+  hasExpiry Boolean @default(true)
+  active    Boolean @default(true)
+  sortOrder Int     @default(0)
 }

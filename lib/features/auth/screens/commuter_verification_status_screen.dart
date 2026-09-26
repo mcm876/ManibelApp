@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/api_client.dart';
+import '../../../core/services/id_verification.dart';
 import 'about_app_screen.dart';
 import 'commuter_login_screen.dart';
 import 'commuter_resubmit_screen.dart';
@@ -42,9 +43,14 @@ class _CommuterVerificationStatusScreenState extends State<CommuterVerificationS
   late String? _status = widget.status;
   Timer? _pollTimer;
 
+  /// Why the account is waiting on a person (FACE_NOT_MATCHED, ...), from
+  /// GET /verification-status — turned into a plain explanation below.
+  List<String> _reviewReasons = const [];
+
   @override
   void initState() {
     super.initState();
+    _checkStatus(); // fetch the review reasons right away, not after the first tick
     _pollTimer = Timer.periodic(_pollInterval, (_) => _checkStatus());
   }
 
@@ -61,8 +67,12 @@ class _CommuterVerificationStatusScreenState extends State<CommuterVerificationS
       );
       if (!mounted) return;
       final nextStatus = response['verificationStatus'] as String?;
-      if (nextStatus != _status) {
-        setState(() => _status = nextStatus);
+      final nextReasons = ((response['reviewReasons'] as List?) ?? const []).cast<String>();
+      if (nextStatus != _status || nextReasons.join(',') != _reviewReasons.join(',')) {
+        setState(() {
+          _status = nextStatus;
+          _reviewReasons = nextReasons;
+        });
       }
       if (nextStatus == 'APPROVED' || nextStatus == 'REJECTED') {
         _pollTimer?.cancel();
@@ -71,6 +81,17 @@ class _CommuterVerificationStatusScreenState extends State<CommuterVerificationS
       // Best-effort — a failed poll just tries again on the next tick,
       // it never blocks or errors out this screen.
     }
+  }
+
+  /// When the ID/selfie couldn't be auto-approved, say why — e.g. "Your
+  /// selfie didn't match the photo on your ID." — before the usual
+  /// "a person is reviewing it" text, so the commuter isn't left guessing.
+  String get _pendingMessage {
+    final why = IdVerification.reviewExplanation(_reviewReasons);
+    const base = "We're reviewing the ID and selfie you submitted. This usually only takes a short while — please check back later.";
+    return why.isEmpty
+        ? base
+        : '$why Your submission has been sent for manual verification by our team. Please check back later.';
   }
 
   bool get _isRejected => _status == 'REJECTED';
@@ -124,7 +145,7 @@ class _CommuterVerificationStatusScreenState extends State<CommuterVerificationS
         ? "We couldn't verify the ID and selfie you submitted. Submit clearer photos and a new selfie to try again."
         : _isApproved
             ? 'Your account has been approved. You can now log in and start using ManibelaApp.'
-            : "We're reviewing the ID and selfie you submitted. This usually only takes a short while — please check back later.";
+            : _pendingMessage;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF5F6F8),

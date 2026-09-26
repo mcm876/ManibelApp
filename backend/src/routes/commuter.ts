@@ -22,7 +22,8 @@ import { normalizePlateNumber } from '../utils/plate';
 import { toTitleCase } from '../utils/text';
 import { notifyDriver, notifyCommuter, notifyAdmin } from '../utils/notify';
 import { authLimiter } from '../middleware/rateLimit';
-import { compareFaces, fetchImageBuffer, FACE_MATCH_AUTO_CLEAR_SCORE } from '../lib/faceMatch';
+import { compareFaces, fetchImageBuffer } from '../lib/faceMatch';
+import { idRejectionMessage, reviewReasons as computeReviewReasons } from '../lib/idChecks';
 import { distanceMeters, estimateEtaMinutes } from '../utils/geo';
 import { getRoute } from '../lib/routingService';
 import { estimateTrafficCondition } from '../lib/trafficEstimate';
@@ -61,6 +62,26 @@ async function generateCommuterId(): Promise<string> {
     if (!exists) return candidate;
     next++;
   }
+}
+
+/**
+ * A "YYYY-MM-DD" date the app read off the ID photo, or null when it's
+ * absent or not a real calendar date (a malformed value is treated like an
+ * unreadable one — it sends the account to manual review, never approves it).
+ */
+function parseIdDate(value: unknown): Date | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  const parsed = dateOnly.safeParse(trimmed);
+  // Round-trip catches rollovers like 2020-13-45 that Date.UTC accepts.
+  if (!parsed.success || formatDateOnly(parsed.data) !== trimmed) return null;
+  return parsed.data;
+}
+
+/** The active ID type with this label, or null if it isn't one we accept. */
+async function findActiveIdType(label: string) {
+  const idType = await prisma.governmentIdType.findUnique({ where: { label } });
+  return idType?.active ? idType : null;
 }
 
 function toPublicCommuter(commuter: {
@@ -187,6 +208,21 @@ router.post('/verify-signup-otp', async (req, res, next) => {
 // face-match step.
 // ---------------------------------------------------------------------------
 
+// The ID types the app offers — public, since the sign-up flow that needs
+// it has no account (and so no token) yet.
+router.get('/id-types', async (_req, res, next) => {
+  try {
+    const idTypes = await prisma.governmentIdType.findMany({
+      where: { active: true },
+      orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }],
+      select: { label: true, hasExpiry: true },
+    });
+    res.json({ idTypes });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post('/signup/:ticket/id-photos', (req, res, next) => {
   uploadIdPhotos(req, res, async (err) => {
     if (err) {
@@ -218,6 +254,21 @@ router.post('/signup/:ticket/id-photos', (req, res, next) => {
         res.status(400).json({ error: 'ID type is required.' });
         return;
       }
+      const idTypeRow = await findActiveIdType(idType);
+      if (!idTypeRow) {
+        res.status(400).json({ error: 'That ID type is not accepted.' });
+        return;
+      }
+
+      // Read off the ID by the app; an expired or under-18 ID is turned
+      // away here, before anything is uploaded or stored.
+      const idBirthDate = parseIdDate(req.body.birthDate);
+      const idExpiryDate = parseIdDate(req.body.expiryDate);
+      const rejection = idRejectionMessage({ idBirthDate, idExpiryDate, hasExpiry: idTypeRow.hasExpiry });
+      if (rejection) {
+        res.status(400).json({ error: rejection });
+        return;
+      }
 
       const [idFrontUrl, idBackUrl] = await Promise.all([
         uploadBufferToCloudinary(front.buffer, 'id-photos', { sensitive: true }),
@@ -226,7 +277,7 @@ router.post('/signup/:ticket/id-photos', (req, res, next) => {
 
       await prisma.pendingCommuterSignup.update({
         where: { id: pending.id },
-        data: { idType, idFrontUrl, idBackUrl },
+        data: { idType, idFrontUrl, idBackUrl, idBirthDate, idExpiryDate },
       });
 
       // Only after the DB update succeeds, and only the previous pair —
@@ -323,7 +374,23 @@ router.post('/signup', async (req, res, next) => {
         faceMatchScore = null;
       }
     }
-    const autoCleared = faceMatchScore !== null && faceMatchScore >= FACE_MATCH_AUTO_CLEAR_SCORE;
+    // Auto-approval needs the face to match AND the ID's own dates to check
+    // out (birth date read and matching the sign-up form, expiry read when
+    // this ID type has one) — anything less is listed in reviewReasons for
+    // the admin and shown to the commuter.
+    const idTypeRow = pending.idType
+      ? await prisma.governmentIdType.findUnique({ where: { label: pending.idType } })
+      : null;
+    const reasons = pending.idFrontUrl
+      ? computeReviewReasons({
+          signupBirthDate: pending.dateOfBirth,
+          idBirthDate: pending.idBirthDate,
+          idExpiryDate: pending.idExpiryDate,
+          hasExpiry: idTypeRow?.hasExpiry ?? true,
+          faceMatchScore,
+        })
+      : [];
+    const autoCleared = !!pending.idFrontUrl && reasons.length === 0;
 
     const commuter = await prisma.commuter.create({
       data: {
@@ -338,6 +405,9 @@ router.post('/signup', async (req, res, next) => {
         idBackUrl: pending.idBackUrl,
         selfieUrl: pending.selfieUrl,
         faceMatchScore,
+        idBirthDate: pending.idBirthDate,
+        idExpiryDate: pending.idExpiryDate,
+        reviewReasons: reasons,
         // Submitting docs is what puts an account in the admin review
         // queue — no docs yet (null) is a different state from "waiting
         // on a human," which is why this isn't just "always PENDING". A
@@ -371,6 +441,7 @@ router.post('/signup', async (req, res, next) => {
     res.status(201).json({
       commuter: toPublicCommuter(commuter),
       verificationStatus: commuter.verificationStatus,
+      reviewReasons: commuter.reviewReasons,
     });
   } catch (err) {
     next(err);
@@ -434,6 +505,20 @@ router.post('/resubmit', (req, res, next) => {
         return;
       }
 
+      // Same ID rules as the first submission (see id-photos above).
+      const idTypeRow = await findActiveIdType(body.idType);
+      if (!idTypeRow) {
+        res.status(400).json({ error: 'That ID type is not accepted.' });
+        return;
+      }
+      const idBirthDate = parseIdDate(req.body.birthDate);
+      const idExpiryDate = parseIdDate(req.body.expiryDate);
+      const rejection = idRejectionMessage({ idBirthDate, idExpiryDate, hasExpiry: idTypeRow.hasExpiry });
+      if (rejection) {
+        res.status(400).json({ error: rejection });
+        return;
+      }
+
       const [idFrontUrl, idBackUrl, selfieUrl] = await Promise.all([
         uploadBufferToCloudinary(front.buffer, 'id-photos', { sensitive: true }),
         uploadBufferToCloudinary(back.buffer, 'id-photos', { sensitive: true }),
@@ -453,7 +538,14 @@ router.post('/resubmit', (req, res, next) => {
       } catch {
         faceMatchScore = null;
       }
-      const autoCleared = faceMatchScore !== null && faceMatchScore >= FACE_MATCH_AUTO_CLEAR_SCORE;
+      const reasons = computeReviewReasons({
+        signupBirthDate: existing.dateOfBirth,
+        idBirthDate,
+        idExpiryDate,
+        hasExpiry: idTypeRow.hasExpiry,
+        faceMatchScore,
+      });
+      const autoCleared = reasons.length === 0;
 
       const commuter = await prisma.commuter.update({
         where: { id: existing.id },
@@ -463,6 +555,9 @@ router.post('/resubmit', (req, res, next) => {
           idBackUrl,
           selfieUrl,
           faceMatchScore,
+          idBirthDate,
+          idExpiryDate,
+          reviewReasons: reasons,
           verificationStatus: autoCleared ? 'APPROVED' : 'PENDING',
           isActive: autoCleared,
         },
@@ -484,6 +579,7 @@ router.post('/resubmit', (req, res, next) => {
       res.json({
         commuter: toPublicCommuter(commuter),
         verificationStatus: commuter.verificationStatus,
+        reviewReasons: commuter.reviewReasons,
       });
     } catch (err2) {
       next(err2);
@@ -567,6 +663,9 @@ router.get('/verification-status', async (req, res, next) => {
     res.json({
       verificationStatus: commuter.verificationStatus,
       isActive: commuter.isActive,
+      // Why the account is waiting on a human (empty once approved) — the
+      // app turns these codes into a plain explanation for the commuter.
+      reviewReasons: commuter.reviewReasons,
     });
   } catch (err) {
     next(err);

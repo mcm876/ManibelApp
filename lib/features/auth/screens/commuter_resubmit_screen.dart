@@ -5,17 +5,10 @@ import 'package:flutter/material.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/api_client.dart';
+import '../../../core/services/id_date_parser.dart';
+import '../../../core/services/id_verification.dart';
 import '../../../core/widgets/in_app_camera_capture.dart';
 import 'commuter_verification_status_screen.dart';
-
-const List<String> _resubmitIdTypeOptions = [
-  'Philippine National ID (PhilSys)',
-  "Driver's License",
-  'Passport',
-  'UMID',
-  "Voter's ID",
-  'Postal ID',
-];
 
 /// Reached from CommuterVerificationStatusScreen's REJECTED state — the
 /// one retry path for an account that failed ID/face verification.
@@ -39,6 +32,10 @@ class _CommuterResubmitScreenState extends State<CommuterResubmitScreen> {
   final TextEditingController _passwordController = TextEditingController();
   bool _obscurePassword = true;
 
+  // The accepted ID types come from the backend, not a hardcoded list.
+  List<GovernmentIdType> _idTypes = const [];
+  String? _typesError;
+
   String? _selectedId;
   File? _frontImage;
   File? _backImage;
@@ -46,6 +43,27 @@ class _CommuterResubmitScreenState extends State<CommuterResubmitScreen> {
   bool _isPickingImage = false;
   bool _isSubmitting = false;
   String? _error;
+
+  bool get _selectedHasExpiry =>
+      _idTypes.where((t) => t.label == _selectedId).firstOrNull?.hasExpiry ?? true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadIdTypes();
+  }
+
+  Future<void> _loadIdTypes() async {
+    setState(() => _typesError = null);
+    try {
+      final types = await IdVerification.fetchIdTypes();
+      if (!mounted) return;
+      setState(() => _idTypes = types);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _typesError = "Couldn't load the ID types.");
+    }
+  }
 
   @override
   void dispose() {
@@ -113,6 +131,19 @@ class _CommuterResubmitScreenState extends State<CommuterResubmitScreen> {
     });
 
     try {
+      // Same ID checks as first-time sign-up: read the dates on-device and
+      // stop early on an expired / under-18 ID (the backend re-checks).
+      final IdDates dates = await IdVerification.readDates([_frontImage!, _backImage!]);
+      if (!mounted) return;
+      final rejection = IdVerification.rejectionMessage(dates, hasExpiry: _selectedHasExpiry);
+      if (rejection != null) {
+        setState(() {
+          _isSubmitting = false;
+          _error = rejection;
+        });
+        return;
+      }
+
       final response = await ApiClient.uploadFiles(
         '/api/commuter/resubmit',
         files: {
@@ -124,6 +155,8 @@ class _CommuterResubmitScreenState extends State<CommuterResubmitScreen> {
           'mobileNumber': widget.mobileNumber,
           'password': _passwordController.text,
           'idType': _selectedId!,
+          if (dates.birthDate != null) 'birthDate': toIsoDate(dates.birthDate!),
+          if (dates.expiryDate != null) 'expiryDate': toIsoDate(dates.expiryDate!),
         },
       );
 
@@ -248,10 +281,22 @@ class _CommuterResubmitScreenState extends State<CommuterResubmitScreen> {
                   borderSide: const BorderSide(color: AppColors.logoBlue, width: 1.5),
                 ),
               ),
-              items: _resubmitIdTypeOptions
-                  .map((label) => DropdownMenuItem(value: label, child: Text(label)))
+              items: _idTypes
+                  .map((t) => DropdownMenuItem(value: t.label, child: Text(t.label)))
                   .toList(),
             ),
+            if (_typesError != null)
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _typesError!,
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFFE23F3F)),
+                    ),
+                  ),
+                  TextButton(onPressed: _loadIdTypes, child: const Text('Retry')),
+                ],
+              ),
             const SizedBox(height: 20),
             const Text(
               'Upload ID Photos',
