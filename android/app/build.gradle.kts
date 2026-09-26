@@ -53,7 +53,7 @@ android {
             // Extra R8 rules (see proguard-rules.pro) — needed for the ML
             // Kit text-recognition plugin's optional language packs.
             proguardFiles(
-                getDefaultProguardFile("proguard-android.txt"),
+                getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
             signingConfig = if (keystorePropertiesFile.exists()) {
