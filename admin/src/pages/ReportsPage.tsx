@@ -9,20 +9,17 @@ import { usePolling } from '../lib/usePolling';
 import { manilaDateRangeForCustom } from '../lib/formatDate';
 import { formatPhone } from '../lib/formatPhone';
 import {
-  createReportWorkbook,
-  addReportSheet,
   addTitleBlock,
   addSectionHeader,
   addTable,
-  autoFitColumns,
-  freezeHeaderRow,
-  downloadWorkbook,
-  toManilaExcelDate,
-  parseDateOnlyForExcel,
-  formatCurrencyText,
+  addNote,
+  downloadCsv,
+  formatManilaDate,
+  formatManilaTime,
+  money,
   type ColumnSpec,
-  type CellValue,
-} from '../lib/xlsxExport';
+  type CsvRows,
+} from '../lib/csvExport';
 
 interface PerDriverRow {
   driverId: string;
@@ -198,6 +195,14 @@ function sumBy<T>(items: T[], get: (item: T) => number): number {
  * period with no logged days, or no trips at all). */
 function safeDivide(numerator: number, denominator: number): number {
   return denominator > 0 ? numerator / denominator : 0;
+}
+
+/** "0917 123 4567" - the admin-facing 09171234567 with spaces added, so a
+ * spreadsheet keeps it as text instead of reading the whole thing as a
+ * number and dropping the leading 0. */
+function formatPhoneForCsv(mobileNumber: string): string {
+  const local = formatPhone(mobileNumber);
+  return /^\d{11}$/.test(local) ? `${local.slice(0, 4)} ${local.slice(4, 7)} ${local.slice(7)}` : local;
 }
 
 /** "PENDING" -> "Pending". */
@@ -380,59 +385,55 @@ export default function ReportsPage() {
       const generatedLine = `Generated: ${formatLongDate(today)}`;
       const periodLine = `Report Period: ${res.reportPeriodLabel}`;
 
-      const workbook = createReportWorkbook();
+      // A CSV has no sheets, so the Summary / Daily Breakdown / By Driver
+      // views that used to be separate worksheets are three sections of the
+      // one file, each under its own title block.
+      const rows: CsvRows = [];
 
-      // --- Sheet 1: Summary --------------------------------------------
-      const summarySheet = addReportSheet(workbook, 'Summary');
-      let row = addTitleBlock(summarySheet, 'MANIBELAAPP OPERATIONS REPORT', [periodLine, generatedLine], 2);
-      row = addSectionHeader(summarySheet, 'Summary', row, 2);
+      // --- Section 1: Summary --------------------------------------------
+      addTitleBlock(rows, 'MANIBELAAPP OPERATIONS REPORT', [periodLine, generatedLine]);
+      addSectionHeader(rows, 'Summary');
       const metricColumns: ColumnSpec[] = [
-        { header: 'Metric', type: 'text', width: 26 },
-        { header: 'Value', type: 'text', align: 'right', width: 18 },
+        { header: 'Metric', type: 'text' },
+        { header: 'Value', type: 'number' },
       ];
-      const metricRows: CellValue[][] = [
-        ['Total Earnings', formatCurrencyText(res.summary.totalEarnings)],
-        ['Total Expenses', formatCurrencyText(res.summary.totalExpenses)],
-        ['Net Income', formatCurrencyText(res.summary.netIncome)],
+      addTable(rows, metricColumns, [
+        ['Total Earnings (PHP)', money(res.summary.totalEarnings)],
+        ['Total Expenses (PHP)', money(res.summary.totalExpenses)],
+        ['Net Income (PHP)', money(res.summary.netIncome)],
         ['Total Trips', res.summary.totalTrips],
         ['Days With Logged Entries', res.summary.daysWithLogs],
-      ];
-      ({ nextRow: row } = addTable(summarySheet, row, metricColumns, metricRows));
-      row++;
+      ]);
 
-      row = addSectionHeader(summarySheet, 'Expense Breakdown', row, 2);
-      const expenseColumns: ColumnSpec[] = [
-        { header: 'Expense Type', type: 'text', width: 26 },
-        { header: 'Amount', type: 'currency' },
-      ];
-      const expenseRows: CellValue[][] = [
-        ['Fuel', res.summary.totalFuelExpense],
-        ['Other Expenses', res.summary.totalOtherExpenses],
-      ];
-      ({ nextRow: row } = addTable(summarySheet, row, expenseColumns, expenseRows, ['Total Expenses', res.summary.totalExpenses]));
-      row++;
+      addSectionHeader(rows, 'Expense Breakdown');
+      addTable(
+        rows,
+        [
+          { header: 'Expense Type', type: 'text' },
+          { header: 'Amount (PHP)', type: 'currency' },
+        ],
+        [
+          ['Fuel', res.summary.totalFuelExpense],
+          ['Other Expenses', res.summary.totalOtherExpenses],
+        ],
+        ['Total Expenses', res.summary.totalExpenses],
+      );
 
-      // Expense Distribution — right after Expense Breakdown, same two
-      // amounts as a share of total expenses. Fractions (0.798), not
-      // 79.8 — the 'percent' column type's numFmt multiplies by 100 for
-      // display, so a pre-multiplied value would double up.
-      row = addSectionHeader(summarySheet, 'Expense Distribution', row, 2);
-      const distributionColumns: ColumnSpec[] = [
-        { header: 'Expense Type', type: 'text', width: 26 },
-        { header: 'Percentage', type: 'percent' },
-      ];
-      const distributionRows: CellValue[][] = [
-        ['Fuel', safeDivide(res.summary.totalFuelExpense, res.summary.totalExpenses)],
-        ['Other Expenses', safeDivide(res.summary.totalOtherExpenses, res.summary.totalExpenses)],
-      ];
-      ({ nextRow: row } = addTable(
-        summarySheet,
-        row,
-        distributionColumns,
-        distributionRows,
+      // Expense Distribution — same two amounts as a share of total
+      // expenses (fractions in, percentages out; see addTable).
+      addSectionHeader(rows, 'Expense Distribution');
+      addTable(
+        rows,
+        [
+          { header: 'Expense Type', type: 'text' },
+          { header: 'Percentage (%)', type: 'percent' },
+        ],
+        [
+          ['Fuel', safeDivide(res.summary.totalFuelExpense, res.summary.totalExpenses)],
+          ['Other Expenses', safeDivide(res.summary.totalOtherExpenses, res.summary.totalExpenses)],
+        ],
         ['Total Expenses', res.summary.totalExpenses > 0 ? 1 : 0],
-      ));
-      row++;
+      );
 
       // Performance Summary — calculated operational averages. "Per day"
       // here always means per *logged* day (daysWithLogs), never the raw
@@ -440,101 +441,77 @@ export default function ReportsPage() {
       // otherwise understate what a driver typically earns/spends on a
       // day they actually work, and mixing denominators across these five
       // rows would make them impossible to compare against each other.
-      row = addSectionHeader(summarySheet, 'Performance Summary', row, 2);
-      const performanceRows: CellValue[][] = [
-        ['Average Earnings / Day', formatCurrencyText(safeDivide(res.summary.totalEarnings, res.summary.daysWithLogs))],
-        ['Average Expenses / Day', formatCurrencyText(safeDivide(res.summary.totalExpenses, res.summary.daysWithLogs))],
-        ['Average Net Income / Day', formatCurrencyText(safeDivide(res.summary.netIncome, res.summary.daysWithLogs))],
-        ['Average Earnings / Trip', formatCurrencyText(safeDivide(res.summary.totalEarnings, res.summary.totalTrips))],
+      addSectionHeader(rows, 'Performance Summary');
+      addTable(rows, metricColumns, [
+        ['Average Earnings / Day (PHP)', money(safeDivide(res.summary.totalEarnings, res.summary.daysWithLogs))],
+        ['Average Expenses / Day (PHP)', money(safeDivide(res.summary.totalExpenses, res.summary.daysWithLogs))],
+        ['Average Net Income / Day (PHP)', money(safeDivide(res.summary.netIncome, res.summary.daysWithLogs))],
+        ['Average Earnings / Trip (PHP)', money(safeDivide(res.summary.totalEarnings, res.summary.totalTrips))],
+        ['Average Trips / Day', money(safeDivide(res.summary.totalTrips, res.summary.daysWithLogs))],
+      ]);
+
+      // --- Section 2: Daily Breakdown ------------------------------------
+      addTitleBlock(rows, 'MANIBELAAPP OPERATIONS REPORT', [periodLine, generatedLine, 'Daily Breakdown']);
+      addTable(
+        rows,
         [
-          'Average Trips / Day',
-          safeDivide(res.summary.totalTrips, res.summary.daysWithLogs).toLocaleString('en-PH', {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          }),
+          { header: 'Date', type: 'text' },
+          { header: 'Earnings (PHP)', type: 'currency' },
+          { header: 'Fuel (PHP)', type: 'currency' },
+          { header: 'Other Expenses (PHP)', type: 'currency' },
+          { header: 'Total Expenses (PHP)', type: 'currency' },
+          { header: 'Net Income (PHP)', type: 'currency' },
+          { header: 'Trips', type: 'number' },
         ],
-      ];
-      ({ nextRow: row } = addTable(summarySheet, row, metricColumns, performanceRows));
-
-      autoFitColumns(summarySheet, metricColumns, [...metricRows, ...expenseRows, ...distributionRows, ...performanceRows]);
-
-      // --- Sheet 2: Daily Breakdown --------------------------------------
-      const dailySheet = addReportSheet(workbook, 'Daily Breakdown');
-      const dailyColumns: ColumnSpec[] = [
-        { header: 'Date', type: 'date' },
-        { header: 'Earnings', type: 'currency' },
-        { header: 'Fuel', type: 'currency' },
-        { header: 'Other Expenses', type: 'currency' },
-        { header: 'Total Expenses', type: 'currency' },
-        { header: 'Net Income', type: 'currency' },
-        { header: 'Trips', type: 'number' },
-      ];
-      let dailyRow = addTitleBlock(dailySheet, 'MANIBELAAPP OPERATIONS REPORT', [periodLine, generatedLine, 'Daily Breakdown'], dailyColumns.length);
-      const dailyRows: CellValue[][] = res.daily.map((d) => [
-        parseDateOnlyForExcel(d.date),
-        d.earnings,
-        d.fuelExpense,
-        d.otherExpenses,
-        d.totalExpenses,
-        d.netIncome,
-        d.trips,
-      ]);
-      const dailyTotal: CellValue[] = [
-        'TOTAL',
-        sumBy(res.daily, (d) => d.earnings),
-        sumBy(res.daily, (d) => d.fuelExpense),
-        sumBy(res.daily, (d) => d.otherExpenses),
-        sumBy(res.daily, (d) => d.totalExpenses),
-        sumBy(res.daily, (d) => d.netIncome),
-        sumBy(res.daily, (d) => d.trips),
-      ];
-      const dailyTable = addTable(dailySheet, dailyRow, dailyColumns, dailyRows, dailyTotal);
-      autoFitColumns(dailySheet, dailyColumns, dailyRows);
-      freezeHeaderRow(dailySheet, dailyTable.headerRow);
-
-      // --- Sheet 3: By Driver --------------------------------------------
-      const byDriverSheet = addReportSheet(workbook, 'By Driver');
-      const byDriverColumns: ColumnSpec[] = [
-        { header: 'Driver', type: 'text' },
-        { header: 'Plate Number', type: 'text', width: 14 },
-        { header: 'Earnings', type: 'currency' },
-        { header: 'Fuel', type: 'currency' },
-        { header: 'Other Expenses', type: 'currency' },
-        { header: 'Net Income', type: 'currency' },
-        { header: 'Trips', type: 'number' },
-        { header: 'Days Logged', type: 'number' },
-      ];
-      let byDriverRow = addTitleBlock(
-        byDriverSheet,
-        'MANIBELAAPP OPERATIONS REPORT',
-        [periodLine, generatedLine, 'By Driver'],
-        byDriverColumns.length,
+        res.daily.map((d) => [d.date, d.earnings, d.fuelExpense, d.otherExpenses, d.totalExpenses, d.netIncome, d.trips]),
+        [
+          'TOTAL',
+          sumBy(res.daily, (d) => d.earnings),
+          sumBy(res.daily, (d) => d.fuelExpense),
+          sumBy(res.daily, (d) => d.otherExpenses),
+          sumBy(res.daily, (d) => d.totalExpenses),
+          sumBy(res.daily, (d) => d.netIncome),
+          sumBy(res.daily, (d) => d.trips),
+        ],
       );
-      const byDriverRows: CellValue[][] = res.perDriver.map((d) => [
-        d.driverName,
-        d.plateNumber,
-        d.earnings,
-        d.fuelExpense,
-        d.otherExpenses,
-        d.netIncome,
-        d.trips,
-        d.daysLogged,
-      ]);
-      const byDriverTotal: CellValue[] = [
-        'TOTAL',
-        '',
-        sumBy(res.perDriver, (d) => d.earnings),
-        sumBy(res.perDriver, (d) => d.fuelExpense),
-        sumBy(res.perDriver, (d) => d.otherExpenses),
-        sumBy(res.perDriver, (d) => d.netIncome),
-        sumBy(res.perDriver, (d) => d.trips),
-        sumBy(res.perDriver, (d) => d.daysLogged),
-      ];
-      const byDriverTable = addTable(byDriverSheet, byDriverRow, byDriverColumns, byDriverRows, byDriverTotal);
-      autoFitColumns(byDriverSheet, byDriverColumns, byDriverRows);
-      freezeHeaderRow(byDriverSheet, byDriverTable.headerRow);
 
-      await downloadWorkbook(workbook, `operations-report-${days}days-${isoDate(today)}.xlsx`);
+      // --- Section 3: By Driver ------------------------------------------
+      addTitleBlock(rows, 'MANIBELAAPP OPERATIONS REPORT', [periodLine, generatedLine, 'By Driver']);
+      addTable(
+        rows,
+        [
+          { header: 'Driver', type: 'text' },
+          { header: 'Plate Number', type: 'text' },
+          { header: 'Earnings (PHP)', type: 'currency' },
+          { header: 'Fuel (PHP)', type: 'currency' },
+          { header: 'Other Expenses (PHP)', type: 'currency' },
+          { header: 'Net Income (PHP)', type: 'currency' },
+          { header: 'Trips', type: 'number' },
+          { header: 'Days Logged', type: 'number' },
+        ],
+        res.perDriver.map((d) => [
+          d.driverName,
+          d.plateNumber,
+          d.earnings,
+          d.fuelExpense,
+          d.otherExpenses,
+          d.netIncome,
+          d.trips,
+          d.daysLogged,
+        ]),
+        [
+          'TOTAL',
+          '',
+          sumBy(res.perDriver, (d) => d.earnings),
+          sumBy(res.perDriver, (d) => d.fuelExpense),
+          sumBy(res.perDriver, (d) => d.otherExpenses),
+          sumBy(res.perDriver, (d) => d.netIncome),
+          sumBy(res.perDriver, (d) => d.trips),
+          sumBy(res.perDriver, (d) => d.daysLogged),
+        ],
+      );
+
+      downloadCsv(rows, `operations-report-${days}days-${isoDate(today)}.csv`);
     } catch (err) {
       setExportError(err instanceof ApiError ? err.message : 'Could not export the Operations Report.');
     } finally {
@@ -557,11 +534,9 @@ export default function ReportsPage() {
     const rangedParams = dateParams || `days=${days}`;
     const fileSuffix = exportRangeLabel ? exportRangeLabel.replace(' to ', '_to_') : isoDate(today);
 
-    /** Appends the "export capped" notice a row below `afterRow`, if any. */
-    function addTruncationNote(sheet: import('exceljs').Worksheet, afterRow: number, shownCount: number, noun: string) {
-      const cell = sheet.getCell(afterRow, 1);
-      cell.value = `Export capped — showing the ${shownCount} most recent ${noun}.`;
-      cell.font = { italic: true, color: { argb: 'FF6B7280' } };
+    /** The "export capped" notice, if the backend truncated the rows. */
+    function addTruncationNote(rows: CsvRows, shownCount: number, noun: string) {
+      addNote(rows, `Export capped — showing the ${shownCount} most recent ${noun}.`);
     }
 
     try {
@@ -570,95 +545,72 @@ export default function ReportsPage() {
           const res = await apiClient.get<{ rows: DriverExportRow[]; summary: DriverExportSummary; truncated: boolean }>(
             `/api/admin/export/drivers${dateParams ? `?${dateParams}` : ''}`,
           );
-          const workbook = createReportWorkbook();
-          const sheet = addReportSheet(workbook, 'Drivers');
-          const columns: ColumnSpec[] = [
-            { header: 'Driver Name', type: 'text' },
-            { header: 'Driver ID', type: 'text', width: 12 },
-            { header: 'Phone Number', type: 'text', width: 15 },
-            { header: 'Plate Number', type: 'text', width: 13 },
-            { header: 'Route', type: 'text' },
-            { header: 'Verification Status', type: 'text', width: 17 },
-            { header: 'Account Status', type: 'text', width: 14 },
-            { header: 'Date Registered', type: 'date' },
-            { header: 'Total Trips', type: 'number' },
-            { header: 'Completed Trips', type: 'number' },
-          ];
-          let row = addTitleBlock(
-            sheet,
-            'MANIBELAAPP DRIVER REPORT',
-            [...(exportRangeLabel ? [`Joined: ${exportRangeLabel}`] : []), generatedLine],
-            columns.length,
-          );
-          row = addSectionHeader(sheet, 'Summary', row, columns.length);
-          ({ nextRow: row } = addTable(
-            sheet,
-            row,
+          const rows: CsvRows = [];
+          addTitleBlock(rows, 'MANIBELAAPP DRIVER REPORT', [
+            ...(exportRangeLabel ? [`Joined: ${exportRangeLabel}`] : []),
+            generatedLine,
+          ]);
+          addSectionHeader(rows, 'Summary');
+          addTable(
+            rows,
             [
-              { header: 'Metric', type: 'text', width: 22 },
-              { header: 'Value', type: 'number', align: 'right' },
+              { header: 'Metric', type: 'text' },
+              { header: 'Value', type: 'number' },
             ],
             [
               ['Total Drivers', res.summary.totalDrivers],
               ['Active Drivers', res.summary.activeDrivers],
               ['Inactive Drivers', res.summary.inactiveDrivers],
             ],
-          ));
-          row++;
-          row = addSectionHeader(sheet, 'Drivers', row, columns.length);
-          const dataRows: CellValue[][] = res.rows.map((r) => [
-            r.fullName,
-            r.driverId,
-            formatPhone(r.mobileNumber),
-            r.plateNumber,
-            r.route,
-            r.licenseVerified ? 'Verified' : 'Pending',
-            r.isActive ? 'Active' : 'Inactive',
-            toManilaExcelDate(r.createdAt),
-            r.totalTrips,
-            r.completedTrips,
-          ]);
-          const totalRow: CellValue[] = [
-            'TOTAL', '', '', '', '', '', '', '',
-            sumBy(res.rows, (r) => r.totalTrips),
-            sumBy(res.rows, (r) => r.completedTrips),
-          ];
-          const table = addTable(sheet, row, columns, dataRows, totalRow);
-          if (res.truncated) addTruncationNote(sheet, table.nextRow, res.rows.length, 'recently joined drivers');
-          autoFitColumns(sheet, columns, dataRows);
-          freezeHeaderRow(sheet, table.headerRow);
-          await downloadWorkbook(workbook, `drivers-${fileSuffix}.xlsx`);
+          );
+          addSectionHeader(rows, 'Drivers');
+          addTable(
+            rows,
+            [
+              { header: 'Driver Name', type: 'text' },
+              { header: 'Driver ID', type: 'text' },
+              { header: 'Phone Number', type: 'text' },
+              { header: 'Plate Number', type: 'text' },
+              { header: 'Route', type: 'text' },
+              { header: 'Verification Status', type: 'text' },
+              { header: 'Account Status', type: 'text' },
+              { header: 'Date Registered', type: 'text' },
+              { header: 'Total Trips', type: 'number' },
+              { header: 'Completed Trips', type: 'number' },
+            ],
+            res.rows.map((r) => [
+              r.fullName,
+              r.driverId,
+              formatPhoneForCsv(r.mobileNumber),
+              r.plateNumber,
+              r.route,
+              r.licenseVerified ? 'Verified' : 'Pending',
+              r.isActive ? 'Active' : 'Inactive',
+              formatManilaDate(r.createdAt),
+              r.totalTrips,
+              r.completedTrips,
+            ]),
+            ['TOTAL', '', '', '', '', '', '', '', sumBy(res.rows, (r) => r.totalTrips), sumBy(res.rows, (r) => r.completedTrips)],
+          );
+          if (res.truncated) addTruncationNote(rows, res.rows.length, 'recently joined drivers');
+          downloadCsv(rows, `drivers-${fileSuffix}.csv`);
           break;
         }
         case 'commuters': {
           const res = await apiClient.get<{ rows: CommuterExportRow[]; summary: CommuterExportSummary; truncated: boolean }>(
             `/api/admin/export/commuters${dateParams ? `?${dateParams}` : ''}`,
           );
-          const workbook = createReportWorkbook();
-          const sheet = addReportSheet(workbook, 'Commuters');
-          const columns: ColumnSpec[] = [
-            { header: 'Commuter Name', type: 'text' },
-            { header: 'Commuter ID', type: 'text', width: 13 },
-            { header: 'Phone Number', type: 'text', width: 15 },
-            { header: 'Verification Status', type: 'text', width: 17 },
-            { header: 'ID Verification Status', type: 'text', width: 19 },
-            { header: 'Account Status', type: 'text', width: 14 },
-            { header: 'Date Registered', type: 'date' },
-            { header: 'Total Trips', type: 'number' },
-          ];
-          let row = addTitleBlock(
-            sheet,
-            'MANIBELAAPP COMMUTER REPORT',
-            [...(exportRangeLabel ? [`Joined: ${exportRangeLabel}`] : []), generatedLine],
-            columns.length,
-          );
-          row = addSectionHeader(sheet, 'Summary', row, columns.length);
-          ({ nextRow: row } = addTable(
-            sheet,
-            row,
+          const rows: CsvRows = [];
+          addTitleBlock(rows, 'MANIBELAAPP COMMUTER REPORT', [
+            ...(exportRangeLabel ? [`Joined: ${exportRangeLabel}`] : []),
+            generatedLine,
+          ]);
+          addSectionHeader(rows, 'Summary');
+          addTable(
+            rows,
             [
-              { header: 'Metric', type: 'text', width: 22 },
-              { header: 'Value', type: 'number', align: 'right' },
+              { header: 'Metric', type: 'text' },
+              { header: 'Value', type: 'number' },
             ],
             [
               ['Total Commuters', res.summary.totalCommuters],
@@ -669,53 +621,48 @@ export default function ReportsPage() {
               ['Approved ID Verification', res.summary.approvedVerification],
               ['Rejected ID Verification', res.summary.rejectedVerification],
             ],
-          ));
-          row++;
-          row = addSectionHeader(sheet, 'Commuters', row, columns.length);
-          const dataRows: CellValue[][] = res.rows.map((r) => [
-            r.fullName,
-            r.commuterId,
-            formatPhone(r.mobileNumber),
-            r.phoneVerified ? 'Verified' : 'Not Verified',
-            r.verificationStatus ? capitalize(r.verificationStatus) : 'Not Submitted',
-            r.isActive ? 'Active' : 'Inactive',
-            toManilaExcelDate(r.createdAt),
-            r.totalTrips,
-          ]);
-          const totalRow: CellValue[] = ['TOTAL', '', '', '', '', '', '', sumBy(res.rows, (r) => r.totalTrips)];
-          const table = addTable(sheet, row, columns, dataRows, totalRow);
-          if (res.truncated) addTruncationNote(sheet, table.nextRow, res.rows.length, 'recently joined commuters');
-          autoFitColumns(sheet, columns, dataRows);
-          freezeHeaderRow(sheet, table.headerRow);
-          await downloadWorkbook(workbook, `commuters-${fileSuffix}.xlsx`);
+          );
+          addSectionHeader(rows, 'Commuters');
+          addTable(
+            rows,
+            [
+              { header: 'Commuter Name', type: 'text' },
+              { header: 'Commuter ID', type: 'text' },
+              { header: 'Phone Number', type: 'text' },
+              { header: 'Verification Status', type: 'text' },
+              { header: 'ID Verification Status', type: 'text' },
+              { header: 'Account Status', type: 'text' },
+              { header: 'Date Registered', type: 'text' },
+              { header: 'Total Trips', type: 'number' },
+            ],
+            res.rows.map((r) => [
+              r.fullName,
+              r.commuterId,
+              formatPhoneForCsv(r.mobileNumber),
+              r.phoneVerified ? 'Verified' : 'Not Verified',
+              r.verificationStatus ? capitalize(r.verificationStatus) : 'Not Submitted',
+              r.isActive ? 'Active' : 'Inactive',
+              formatManilaDate(r.createdAt),
+              r.totalTrips,
+            ]),
+            ['TOTAL', '', '', '', '', '', '', sumBy(res.rows, (r) => r.totalTrips)],
+          );
+          if (res.truncated) addTruncationNote(rows, res.rows.length, 'recently joined commuters');
+          downloadCsv(rows, `commuters-${fileSuffix}.csv`);
           break;
         }
         case 'trips': {
           const res = await apiClient.get<{ rows: TripExportRow[]; summary: TripExportSummary; truncated: boolean }>(
             `/api/admin/export/trips?${rangedParams}`,
           );
-          const workbook = createReportWorkbook();
-          const sheet = addReportSheet(workbook, 'Trips');
-          const columns: ColumnSpec[] = [
-            { header: 'Trip Number', type: 'text', width: 12 },
-            { header: 'Driver', type: 'text' },
-            { header: 'Plate Number', type: 'text', width: 13 },
-            { header: 'Route', type: 'text' },
-            { header: 'Trip Date', type: 'date' },
-            { header: 'Start Time', type: 'time' },
-            { header: 'End Time', type: 'time' },
-            { header: 'Duration', type: 'text', width: 12 },
-            { header: 'Trip Status', type: 'text', width: 12 },
-            { header: 'Flag', type: 'text', width: 22 },
-          ];
-          let row = addTitleBlock(sheet, 'MANIBELAAPP TRIP REPORT', [periodLine, generatedLine], columns.length);
-          row = addSectionHeader(sheet, 'Summary', row, columns.length);
-          ({ nextRow: row } = addTable(
-            sheet,
-            row,
+          const rows: CsvRows = [];
+          addTitleBlock(rows, 'MANIBELAAPP TRIP REPORT', [periodLine, generatedLine]);
+          addSectionHeader(rows, 'Summary');
+          addTable(
+            rows,
             [
-              { header: 'Metric', type: 'text', width: 22 },
-              { header: 'Value', type: 'number', align: 'right' },
+              { header: 'Metric', type: 'text' },
+              { header: 'Value', type: 'number' },
             ],
             [
               ['Total Trips', res.summary.totalTrips],
@@ -723,61 +670,57 @@ export default function ReportsPage() {
               ['Active', res.summary.activeTrips],
               ['Short Trips Flagged', res.summary.shortTripsFlagged],
             ],
-          ));
-          row++;
-          row = addSectionHeader(sheet, 'Trips', row, columns.length);
+          );
+          addSectionHeader(rows, 'Trips');
           // Chronological ascending (oldest first) so Trip Number climbs
           // top to bottom the way a reader expects — the backend returns
           // newest-first, matching its other list endpoints' convention.
           const orderedTrips = [...res.rows].sort(
             (a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime(),
           );
-          const dataRows: CellValue[][] = orderedTrips.map((r, i) => [
-            sequentialId('TRIP', i),
-            r.driverName,
-            r.plateNumber,
-            r.route,
-            toManilaExcelDate(r.startedAt),
-            toManilaExcelDate(r.startedAt),
-            r.endedAt ? toManilaExcelDate(r.endedAt) : null,
-            formatDuration(r.startedAt, r.endedAt),
-            r.status === 'COMPLETED' ? 'Completed' : 'Active',
-            r.isShortTrip ? 'Short Trip – Flagged' : '—',
-          ]);
-          const table = addTable(sheet, row, columns, dataRows);
-          if (res.truncated) addTruncationNote(sheet, table.nextRow, res.rows.length, 'trips in this range');
-          autoFitColumns(sheet, columns, dataRows);
-          freezeHeaderRow(sheet, table.headerRow);
-          await downloadWorkbook(workbook, `trips-${fileSuffix}.xlsx`);
+          addTable(
+            rows,
+            [
+              { header: 'Trip Number', type: 'text' },
+              { header: 'Driver', type: 'text' },
+              { header: 'Plate Number', type: 'text' },
+              { header: 'Route', type: 'text' },
+              { header: 'Trip Date', type: 'text' },
+              { header: 'Start Time', type: 'text' },
+              { header: 'End Time', type: 'text' },
+              { header: 'Duration', type: 'text' },
+              { header: 'Trip Status', type: 'text' },
+              { header: 'Flag', type: 'text' },
+            ],
+            orderedTrips.map((r, i) => [
+              sequentialId('TRIP', i),
+              r.driverName,
+              r.plateNumber,
+              r.route,
+              formatManilaDate(r.startedAt),
+              formatManilaTime(r.startedAt),
+              r.endedAt ? formatManilaTime(r.endedAt) : null,
+              formatDuration(r.startedAt, r.endedAt),
+              r.status === 'COMPLETED' ? 'Completed' : 'Active',
+              r.isShortTrip ? 'Short Trip – Flagged' : '—',
+            ]),
+          );
+          if (res.truncated) addTruncationNote(rows, res.rows.length, 'trips in this range');
+          downloadCsv(rows, `trips-${fileSuffix}.csv`);
           break;
         }
         case 'complaints': {
           const res = await apiClient.get<{ rows: ComplaintExportRow[]; summary: ComplaintExportSummary; truncated: boolean }>(
             `/api/admin/export/complaints?${rangedParams}`,
           );
-          const workbook = createReportWorkbook();
-          const sheet = addReportSheet(workbook, 'Incident Reports');
-          const columns: ColumnSpec[] = [
-            { header: 'Incident ID', type: 'text', width: 12 },
-            { header: 'Date', type: 'date' },
-            { header: 'Time', type: 'time' },
-            { header: 'Type', type: 'text' },
-            { header: 'Driver', type: 'text' },
-            { header: 'Plate Number', type: 'text', width: 13 },
-            { header: 'Route', type: 'text' },
-            { header: 'Description', type: 'text', width: 42 },
-            { header: 'Status', type: 'text', width: 14 },
-            { header: 'Resolution', type: 'text', width: 14 },
-            { header: 'Date Resolved', type: 'date' },
-          ];
-          let row = addTitleBlock(sheet, 'MANIBELAAPP INCIDENT REPORT', [periodLine, generatedLine], columns.length);
-          row = addSectionHeader(sheet, 'Summary', row, columns.length);
-          ({ nextRow: row } = addTable(
-            sheet,
-            row,
+          const rows: CsvRows = [];
+          addTitleBlock(rows, 'MANIBELAAPP INCIDENT REPORT', [periodLine, generatedLine]);
+          addSectionHeader(rows, 'Summary');
+          addTable(
+            rows,
             [
-              { header: 'Metric', type: 'text', width: 22 },
-              { header: 'Value', type: 'number', align: 'right' },
+              { header: 'Metric', type: 'text' },
+              { header: 'Value', type: 'number' },
             ],
             [
               ['Total Complaints', res.summary.totalComplaints],
@@ -786,30 +729,42 @@ export default function ReportsPage() {
               ['Resolved', res.summary.resolved],
               ['Rejected', res.summary.rejected],
             ],
-          ));
-          row++;
-          row = addSectionHeader(sheet, 'Incident Reports', row, columns.length);
+          );
+          addSectionHeader(rows, 'Incident Reports');
           const orderedComplaints = [...res.rows].sort(
             (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
           );
-          const dataRows: CellValue[][] = orderedComplaints.map((r, i) => [
-            sequentialId('INC', i),
-            toManilaExcelDate(r.createdAt),
-            toManilaExcelDate(r.createdAt),
-            r.complaintType,
-            r.driverName,
-            r.plateNumber,
-            r.route,
-            r.description,
-            capitalize(r.status),
-            r.resolution ? capitalize(r.resolution) : '—',
-            r.resolvedAt ? toManilaExcelDate(r.resolvedAt) : null,
-          ]);
-          const table = addTable(sheet, row, columns, dataRows);
-          if (res.truncated) addTruncationNote(sheet, table.nextRow, res.rows.length, 'reports in this range');
-          autoFitColumns(sheet, columns, dataRows);
-          freezeHeaderRow(sheet, table.headerRow);
-          await downloadWorkbook(workbook, `incident-reports-${fileSuffix}.xlsx`);
+          addTable(
+            rows,
+            [
+              { header: 'Incident ID', type: 'text' },
+              { header: 'Date', type: 'text' },
+              { header: 'Time', type: 'text' },
+              { header: 'Type', type: 'text' },
+              { header: 'Driver', type: 'text' },
+              { header: 'Plate Number', type: 'text' },
+              { header: 'Route', type: 'text' },
+              { header: 'Description', type: 'text' },
+              { header: 'Status', type: 'text' },
+              { header: 'Resolution', type: 'text' },
+              { header: 'Date Resolved', type: 'text' },
+            ],
+            orderedComplaints.map((r, i) => [
+              sequentialId('INC', i),
+              formatManilaDate(r.createdAt),
+              formatManilaTime(r.createdAt),
+              r.complaintType,
+              r.driverName,
+              r.plateNumber,
+              r.route,
+              r.description,
+              capitalize(r.status),
+              r.resolution ? capitalize(r.resolution) : '—',
+              r.resolvedAt ? formatManilaDate(r.resolvedAt) : null,
+            ]),
+          );
+          if (res.truncated) addTruncationNote(rows, res.rows.length, 'reports in this range');
+          downloadCsv(rows, `incident-reports-${fileSuffix}.csv`);
           break;
         }
       }

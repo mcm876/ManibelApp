@@ -1,12 +1,12 @@
 // The real, officially-registered Pasig-Quiapo PUJ route (DOTr/Sakay route
 // DOTR:R_SAKAY_2018_PUJ_657 — https://explore.sakay.ph/routes/DOTR:R_SAKAY_2018_PUJ_657):
 // Caruncho Ave./Market Ave., Pasig <-> Arlegui / Quezon Blvd., Manila via
-// Shaw Blvd., Victorio Mapa Blvd. and Ramon Magsaysay Blvd. Both paths are
-// the shapes Sakay publishes for the route's two trips (T_SAKAY_2018_1316
-// outbound, T_SAKAY_2018_1317 return), simplified with Douglas-Peucker at
-// ~3 m so the polyline stays light. The return leg is deliberately its own
-// shape, not the outbound reversed — one-way streets in Manila make the two
-// directions take different roads.
+// Shaw Blvd., Victorio Mapa Blvd. and Ramon Magsaysay Blvd. The Pasig ->
+// Quiapo path is the shape Sakay publishes for the route's outbound trip
+// (T_SAKAY_2018_1316), simplified with Douglas-Peucker at ~3 m so the
+// polyline stays light, and is the single source of truth for the corridor:
+// Quiapo -> Pasig is that same path in reverse (see QUIAPO_PASIG_ROUTE), not
+// a separately stored shape.
 
 // Pasig -> Quiapo (trip T_SAKAY_2018_1316).
 const PASIG_QUIAPO_ROUTE: [number, number][] = [
@@ -128,106 +128,12 @@ const PASIG_QUIAPO_ROUTE: [number, number][] = [
   [14.597200, 120.985010],
 ];
 
-// Quiapo -> Pasig (trip T_SAKAY_2018_1317).
-const QUIAPO_PASIG_ROUTE: [number, number][] = [
-  [14.599490, 120.984350],
-  [14.601210, 120.984670],
-  [14.601430, 120.984790],
-  [14.601920, 120.984930],
-  [14.602860, 120.985130],
-  [14.602950, 120.985200],
-  [14.602980, 120.985300],
-  [14.600320, 120.990960],
-  [14.600940, 120.991650],
-  [14.601440, 120.992560],
-  [14.601500, 120.992750],
-  [14.601470, 120.993040],
-  [14.601230, 120.993880],
-  [14.600570, 120.995790],
-  [14.600500, 120.996280],
-  [14.600780, 120.997120],
-  [14.601060, 120.998530],
-  [14.601190, 121.000400],
-  [14.601730, 121.006060],
-  [14.601920, 121.008690],
-  [14.602270, 121.011760],
-  [14.602490, 121.014490],
-  [14.602670, 121.015540],
-  [14.602660, 121.015770],
-  [14.602540, 121.015950],
-  [14.600260, 121.016710],
-  [14.600150, 121.016810],
-  [14.599880, 121.015970],
-  [14.597490, 121.016730],
-  [14.597660, 121.017600],
-  [14.597570, 121.017650],
-  [14.597420, 121.017850],
-  [14.595940, 121.019900],
-  [14.595930, 121.019980],
-  [14.596160, 121.020460],
-  [14.594190, 121.025560],
-  [14.594100, 121.025690],
-  [14.593640, 121.026950],
-  [14.593660, 121.027090],
-  [14.593230, 121.028120],
-  [14.592750, 121.029040],
-  [14.592260, 121.029840],
-  [14.590400, 121.033990],
-  [14.590050, 121.034590],
-  [14.589410, 121.035390],
-  [14.589550, 121.039840],
-  [14.589480, 121.040430],
-  [14.589090, 121.042000],
-  [14.588970, 121.042060],
-  [14.588890, 121.042260],
-  [14.588960, 121.042400],
-  [14.588060, 121.044750],
-  [14.587360, 121.046260],
-  [14.586990, 121.046770],
-  [14.584880, 121.049360],
-  [14.583490, 121.050920],
-  [14.574960, 121.060920],
-  [14.573890, 121.062110],
-  [14.570310, 121.066390],
-  [14.570150, 121.066460],
-  [14.569740, 121.066470],
-  [14.563750, 121.065380],
-  [14.563440, 121.065380],
-  [14.563240, 121.065510],
-  [14.563130, 121.065740],
-  [14.562920, 121.066520],
-  [14.562830, 121.067240],
-  [14.562880, 121.068070],
-  [14.563110, 121.068780],
-  [14.563370, 121.069180],
-  [14.564310, 121.069780],
-  [14.565210, 121.070210],
-  [14.566000, 121.070450],
-  [14.566250, 121.071110],
-  [14.566280, 121.071290],
-  [14.566250, 121.072000],
-  [14.566020, 121.075650],
-  [14.565930, 121.075650],
-  [14.565910, 121.075930],
-  [14.565730, 121.075940],
-  [14.565710, 121.076070],
-  [14.564340, 121.075800],
-  [14.562550, 121.076080],
-  [14.561940, 121.076290],
-  [14.561420, 121.076530],
-  [14.560790, 121.076560],
-  [14.560660, 121.077380],
-  [14.560720, 121.077540],
-  [14.560820, 121.077600],
-  [14.559730, 121.080610],
-  [14.559080, 121.080450],
-  [14.559010, 121.080560],
-  [14.557520, 121.084640],
-  [14.557780, 121.084740],
-  [14.557800, 121.084690],
-  [14.557850, 121.084540],
-  [14.557660, 121.084460],
-];
+// Quiapo -> Pasig. Not a second hand-maintained shape: it is the Pasig ->
+// Quiapo path above, walked in the opposite direction, so the two
+// directions can never drift apart (same road, Ramon Magsaysay Blvd. and
+// Victorio Mapa Blvd. included). Kept identical to RoutePath.quiapoToPasig
+// in the Flutter app's lib/core/constants/route_path.dart.
+const QUIAPO_PASIG_ROUTE: [number, number][] = [...PASIG_QUIAPO_ROUTE].reverse();
 
 export interface RouteDefinition {
   id: string;
@@ -264,9 +170,7 @@ export const ROUTES: RouteDefinition[] = [
     id: 'quiapo-pasig',
     legendLabel: 'Quiapo – Pasig',
     direction: 'Quiapo – Pasig',
-    // Deliberately not PASIG_QUIAPO_ROUTE reversed — see this array's own
-    // doc comment above QUIAPO_PASIG_ROUTE for why the real return trip
-    // takes different streets than the outbound leg.
+    // PASIG_QUIAPO_ROUTE reversed — see QUIAPO_PASIG_ROUTE above.
     path: QUIAPO_PASIG_ROUTE,
     color: '#0B57D0',
     caseColor: '#083D94',

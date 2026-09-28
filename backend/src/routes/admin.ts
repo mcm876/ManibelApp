@@ -1172,6 +1172,10 @@ router.get('/commuters/:id/trips', requireAuth('admin'), async (req, res, next) 
           route: trip?.route ?? null,
           boardedAt: b.boardedAt,
           alightedAt: b.alightedAt,
+          // BOARDED | COMPLETED | CANCELLED — a ride the commuter cancelled
+          // after boarding stays in this list, labeled, rather than vanishing.
+          status: b.status,
+          cancelledAt: b.cancelledAt,
         };
       }),
       currentPage: query.page,
@@ -2180,7 +2184,7 @@ function localDateToUtcDateOnlyKey(d: Date): string {
   return formatDateOnly(new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())));
 }
 
-// Full-detail pull backing the Operations Report's XLSX export (Summary +
+// Full-detail pull backing the Operations Report's CSV export (Summary +
 // Daily Breakdown + By Driver sheets — see ReportsPage.tsx) — distinct from
 // GET /operations-report above (which only feeds the live dashboard/chart
 // and must keep behaving exactly as it does today): this one additionally
@@ -2421,7 +2425,8 @@ router.get('/export/commuters', requireAuth('admin'), async (req, res, next) => 
     const commuterIds = commuters.map((c) => c.id);
     const tripCounts = await prisma.tripBoarding.groupBy({
       by: ['commuterId'],
-      where: { commuterId: { in: commuterIds } },
+      // A cancelled boarding is a ride they never took — not a trip.
+      where: { commuterId: { in: commuterIds }, status: { not: 'CANCELLED' } },
       _count: { _all: true },
     });
     const totalTripsByCommuter = new Map(tripCounts.map((row) => [row.commuterId, row._count._all]));

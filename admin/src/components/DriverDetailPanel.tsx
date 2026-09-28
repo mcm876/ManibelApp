@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { apiClient, ApiError } from '../lib/apiClient';
 import { formatManilaDate } from '../lib/formatDate';
@@ -382,26 +382,52 @@ export function DriverDetailPanel({
   const [licenseActionError, setLicenseActionError] = useState<string | null>(null);
   const [isSubmittingLicense, setIsSubmittingLicense] = useState(false);
 
+  // Bumped by every successful edit made from this panel. A poll (below)
+  // that was already in flight when an edit was saved carries a snapshot
+  // from *before* that edit — applying it would flip the field back to the
+  // old value until the next poll, so its response is dropped instead.
+  const localChangeVersion = useRef(0);
+
+  // Whether the admin has typed into the license-review box themselves —
+  // while they haven't, it simply mirrors whatever number is on file (so it
+  // can't go stale after the number is edited elsewhere in this panel, or
+  // by another admin); once they have, it's theirs and never overwritten.
+  const licenseInputTouched = useRef(false);
+
   function fetchDriver() {
+    const versionAtRequest = localChangeVersion.current;
     apiClient
       .get<{ driver: DriverDetail }>(`/api/admin/drivers/${driverId}`)
-      .then((res) => setDriver(res.driver))
+      .then((res) => {
+        if (versionAtRequest !== localChangeVersion.current) return;
+        setDriver(res.driver);
+      })
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load this driver.'));
+  }
+
+  /** Applies a server-confirmed change to what's shown right now, without
+   * waiting for (or being undone by) the next poll. Merges into the latest
+   * state rather than a render-time snapshot so two quick edits can't
+   * overwrite each other. */
+  function applyLocalChange(change: Partial<DriverDetail>) {
+    localChangeVersion.current += 1;
+    setDriver((current) => (current ? { ...current, ...change } : current));
   }
 
   useEffect(() => {
     setDriver(null);
+    licenseInputTouched.current = false;
     fetchDriver();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driverId]);
 
-  // Seeds the input from whatever's already on file (e.g. re-reviewing
-  // after a rejection) — only once per driver load, not on every poll,
-  // so it doesn't stomp on an admin mid-edit.
+  // Keeps the review input showing the number on file (e.g. re-reviewing
+  // after a rejection, or right after the number above was just edited)
+  // until the admin starts typing in it themselves.
+  const licenseNumberOnFile = driver?.licenseNumber ?? '';
   useEffect(() => {
-    if (driver) setLicenseNumberInput(driver.licenseNumber ?? '');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [driverId, driver === null]);
+    if (!licenseInputTouched.current) setLicenseNumberInput(licenseNumberOnFile);
+  }, [driverId, licenseNumberOnFile]);
 
   // Keeps this panel current while it's open — a driver submitting an
   // explanation, or another admin reviewing a trip, should show up here
@@ -414,7 +440,7 @@ export function DriverDetailPanel({
     try {
       const nextActive = !driver.isActive;
       await apiClient.patch(`/api/admin/drivers/${driver.id}/status`, { isActive: nextActive });
-      setDriver({ ...driver, isActive: nextActive });
+      applyLocalChange({ isActive: nextActive });
       onStatusChange(nextActive);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Something went wrong.');
@@ -438,11 +464,14 @@ export function DriverDetailPanel({
         `/api/admin/drivers/${driver.id}/license-number`,
         { status, licenseNumber: licenseNumberInput.trim() || undefined },
       );
-      setDriver({
-        ...driver,
+      applyLocalChange({
         licenseNumber: res.driver.licenseNumber,
         licenseVerificationStatus: res.driver.licenseVerificationStatus,
       });
+      // The number on file is now what the server just confirmed — drop
+      // any hand-typed draft so the box reflects it.
+      licenseInputTouched.current = false;
+      setLicenseNumberInput(res.driver.licenseNumber ?? '');
     } catch (err) {
       setLicenseActionError(err instanceof ApiError ? err.message : 'Something went wrong.');
     } finally {
@@ -520,17 +549,17 @@ export function DriverDetailPanel({
                 <PlateNumberField
                   driverId={driver.id}
                   plateNumber={driver.plateNumber}
-                  onChanged={(plateNumber) => setDriver({ ...driver, plateNumber })}
+                  onChanged={(plateNumber) => applyLocalChange({ plateNumber })}
                 />
                 <LicenseNumberField
                   driverId={driver.id}
                   licenseNumber={driver.licenseNumber}
-                  onChanged={(licenseNumber) => setDriver({ ...driver, licenseNumber })}
+                  onChanged={(licenseNumber) => applyLocalChange({ licenseNumber })}
                 />
                 <DateOfBirthField
                   driverId={driver.id}
                   dateOfBirth={driver.dateOfBirth}
-                  onChanged={(dateOfBirth) => setDriver({ ...driver, dateOfBirth })}
+                  onChanged={(dateOfBirth) => applyLocalChange({ dateOfBirth })}
                 />
                 <div className="flex justify-between">
                   <dt className="text-gray-500">Date Registered</dt>
@@ -559,7 +588,10 @@ export function DriverDetailPanel({
                     <input
                       type="text"
                       value={licenseNumberInput}
-                      onChange={(e) => setLicenseNumberInput(e.target.value)}
+                      onChange={(e) => {
+                        licenseInputTouched.current = true;
+                        setLicenseNumberInput(e.target.value);
+                      }}
                       placeholder="Type the number from the photo"
                       className="flex-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-sm focus:border-brand-blue focus:outline-none"
                     />

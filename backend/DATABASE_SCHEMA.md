@@ -116,7 +116,9 @@ collapsed.
 
 | Field | Type | Notes |
 |---|---|---|
-| `boardedAt` / `alightedAt` | DateTime / DateTime? | Open (still riding) when `alightedAt` is null |
+| `boardedAt` / `alightedAt` | DateTime / DateTime? | Open (still riding) when `alightedAt` is null. Set for **both** a completed and a cancelled ride, so every "currently on board" check keeps working unchanged |
+| `status` | `BoardingStatus` | `BOARDED` (default) → `COMPLETED` (Para Po / driver ended the trip) or `CANCELLED` (commuter cancelled after boarding). A cancelled ride is kept, never deleted, and shows in the commuter's Trip History as Cancelled |
+| `cancelledAt` | DateTime? | Set only when `status` = `CANCELLED` |
 | `riders` | Int? | Party size at boarding |
 
 **DB constraint (raw SQL):** not a plain `@@unique([tripId, commuterId])`

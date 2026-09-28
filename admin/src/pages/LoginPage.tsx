@@ -149,9 +149,6 @@ export default function LoginPage() {
           </div>
           <div className="animate-form-rise flex flex-col items-center gap-6" style={{ animationDelay: '0.12s' }}>
             <p className="text-sm font-medium text-white/60">Admin Portal</p>
-            <p className="max-w-[280px] text-center text-sm leading-relaxed text-white/45">
-              Fleet oversight, trip review, and rider support for the Pasig&ndash;Quiapo jeepney line.
-            </p>
           </div>
 
           <div
@@ -188,7 +185,6 @@ export default function LoginPage() {
             </div>
 
             <h1 className="font-display text-center text-3xl font-extrabold text-gray-900">Welcome!</h1>
-            <p className="mt-2 text-center text-sm text-gray-500">Sign in to the ManibelaApp admin portal</p>
 
             <label className="mt-8 block text-sm font-semibold text-gray-800" htmlFor="email">
               Email Address
@@ -278,7 +274,7 @@ export default function LoginPage() {
         </div>
 
         <p className="relative pb-6 text-center text-xs text-gray-400">
-          &copy; 2026 ManibelaApp <span className="text-gray-300">&middot;</span> v1.0 &middot; Internal Use Only
+          &copy; 2026 ManibelaApp
         </p>
       </div>
     </div>

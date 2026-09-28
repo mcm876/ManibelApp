@@ -7,8 +7,10 @@ import 'package:latlong2/latlong.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/map_config.dart';
+import '../../../core/constants/route_path.dart';
 import '../../../core/services/api_client.dart';
 import '../../../core/services/driver_session.dart';
+import '../../../core/utils/live_location.dart';
 import '../../../core/utils/location_settings.dart';
 import '../widgets/passenger_info_sheet.dart';
 
@@ -36,6 +38,17 @@ class DriverActiveTrip {
 
   StreamSubscription<Position>? _positionSubscription;
   Timer? _elapsedTimer;
+
+  /// Re-sends the current position on a fixed beat while a trip is active,
+  /// whether or not the jeepney has moved. The position stream below only
+  /// fires when the driver moves a few meters, so a jeepney waiting at the
+  /// terminal — exactly where a trip usually starts — would otherwise go
+  /// completely silent, and the backend hides a trip whose last ping is more
+  /// than 5 minutes old from commuters (see NEARBY_STALENESS_MS in
+  /// commuter.ts). That is what made a started, still-active jeepney vanish
+  /// from the booking map.
+  Timer? _heartbeatTimer;
+  static const Duration _heartbeatInterval = Duration(seconds: 15);
 
   String? route;
   String? plateNumber;
@@ -80,11 +93,16 @@ class DriverActiveTrip {
   }
 
   /// Start a new trip.
+  ///
+  /// [initialLocationIsReal] says whether [initialLocation] is an actual GPS
+  /// fix or just the map's fallback center — only a real one is ever sent to
+  /// the backend, so commuters are never shown a jeepney at a made-up place.
   Future<void> startTrip({
     required String route,
     required String plateNumber,
     required DateTime startTime,
     required LatLng initialLocation,
+    bool initialLocationIsReal = false,
   }) async {
     // If a trip is already active, don't start another one.
     if (isActive) {
@@ -96,7 +114,7 @@ class DriverActiveTrip {
     this.startTime = startTime;
 
     currentLocation = initialLocation;
-    hasRealFix = false;
+    hasRealFix = initialLocationIsReal;
     isActive = true;
     _backendTripId = null;
     _lastLocationPingAt = null;
@@ -107,17 +125,91 @@ class DriverActiveTrip {
     await _startLocationTracking();
 
     // Best-effort — a failed call here shouldn't stop the driver from
-    // working locally; it just means this trip won't show up on the
-    // admin live map (see _backendTripId's doc comment).
+    // working locally; the heartbeat below keeps retrying it, so the trip
+    // still reaches the admin live map and commuters' booking map as soon as
+    // connectivity is back (see _backendTripId's doc comment).
+    await _registerWithBackend();
+    _startHeartbeat();
+  }
+
+  /// Re-attaches to a trip that is still ACTIVE on the backend but no longer
+  /// exists in this process — the app was closed or killed mid-trip. Without
+  /// this the trip keeps running server-side with nobody pinging it, so its
+  /// location goes stale and the jeepney drops off commuters' maps even though
+  /// the driver never ended the trip.
+  Future<void> adoptExisting({
+    required String backendTripId,
+    required String? route,
+    required String plateNumber,
+    required DateTime startTime,
+    LatLng? lastKnownLocation,
+  }) async {
+    if (isActive) return;
+
+    this.route = route;
+    this.plateNumber = plateNumber;
+    this.startTime = startTime;
+
+    // The backend's last position may be minutes old — shown for orientation
+    // only (grey marker) and never re-sent; the first live fix replaces it.
+    currentLocation = lastKnownLocation;
+    hasRealFix = false;
+    isActive = true;
+    _backendTripId = backendTripId;
+    _lastLocationPingAt = null;
+
+    updateNotifier.value++;
+
+    _startElapsedTimer();
+    await _startLocationTracking();
+    _startHeartbeat();
+  }
+
+  /// Creates (or, if one already exists, re-fetches) this driver's backend
+  /// Trip. Seeds it with the current position when that is a real GPS fix, so
+  /// the jeepney is on commuters' maps from the first second instead of only
+  /// once it starts moving.
+  Future<void> _registerWithBackend() async {
+    final here = currentLocation;
+    final sendLocation = hasRealFix && here != null;
     try {
       final response = await ApiClient.post('/api/driver/trips/start', {
         'route': route,
+        if (sendLocation) 'lat': here.latitude,
+        if (sendLocation) 'lng': here.longitude,
       }, token: DriverSession.instance.authToken);
       _backendTripId =
           (response['trip'] as Map<String, dynamic>)['id'] as String?;
+      if (sendLocation) _lastLocationPingAt = DateTime.now();
     } catch (_) {
       _backendTripId = null;
     }
+  }
+
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(_heartbeatInterval, (_) => _heartbeat());
+  }
+
+  Future<void> _heartbeat() async {
+    if (!isActive) return;
+
+    // The start call never made it (offline at the time) — keep trying.
+    if (_backendTripId == null) {
+      await _registerWithBackend();
+      return;
+    }
+
+    final here = currentLocation;
+    if (!hasRealFix || here == null) return;
+
+    // A movement ping just went out — no need to double up.
+    final last = _lastLocationPingAt;
+    if (last != null &&
+        DateTime.now().difference(last) < const Duration(seconds: 12)) {
+      return;
+    }
+    await _sendLocationToBackend(here);
   }
 
   void _startElapsedTimer() {
@@ -167,10 +259,19 @@ class DriverActiveTrip {
       updateNotifier.value++;
 
       _positionSubscription =
-          Geolocator.getPositionStream(
-            locationSettings: const LocationSettings(
-              accuracy: LocationAccuracy.high,
-              distanceFilter: 5,
+          livePositionStream(
+            distanceFilterMeters: 5,
+            // Keeps position updates flowing while the driver's phone is
+            // locked or another app is in front — without this Android stops
+            // delivering them shortly after the app leaves the foreground,
+            // which silently freezes the jeepney on every commuter's map.
+            foregroundNotification: const ForegroundNotificationConfig(
+              notificationTitle: 'Trip in progress',
+              notificationText:
+                  'ManibelaApp is sharing your jeepney\'s live location.',
+              notificationChannelName: 'Trip tracking',
+              enableWakeLock: true,
+              setOngoing: true,
             ),
           ).listen(
             (position) {
@@ -202,9 +303,10 @@ class DriverActiveTrip {
   }
 
   /// Reports the driver's current position to the backend so the admin
-  /// live map reflects it — throttled to at most once per 10 seconds
-  /// (GPS updates fire far more often than that, and the map doesn't
-  /// need finer resolution than "where roughly is this jeepney now").
+  /// live map and commuters' booking map reflect it — throttled to at most
+  /// once per 10 seconds (GPS updates fire far more often than that, and the
+  /// map doesn't need finer resolution than "where roughly is this jeepney
+  /// now"). Standing still is covered separately by the heartbeat.
   Future<void> _pingLocationToBackend(Position position) async {
     if (_backendTripId == null) return;
 
@@ -213,12 +315,18 @@ class DriverActiveTrip {
         now.difference(_lastLocationPingAt!) < const Duration(seconds: 10)) {
       return;
     }
-    _lastLocationPingAt = now;
+    await _sendLocationToBackend(LatLng(position.latitude, position.longitude));
+  }
+
+  Future<void> _sendLocationToBackend(LatLng point) async {
+    final tripId = _backendTripId;
+    if (tripId == null) return;
+    _lastLocationPingAt = DateTime.now();
 
     try {
       await ApiClient.patch(
-        '/api/driver/trips/$_backendTripId/location',
-        {'lat': position.latitude, 'lng': position.longitude},
+        '/api/driver/trips/$tripId/location',
+        {'lat': point.latitude, 'lng': point.longitude},
         token: DriverSession.instance.authToken,
       );
     } catch (_) {
@@ -244,6 +352,8 @@ class DriverActiveTrip {
 
     _elapsedTimer?.cancel();
     _elapsedTimer = null;
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
 
     Map<String, dynamic>? tripJson;
     if (_backendTripId != null) {
@@ -305,12 +415,17 @@ class DriverTripInProgressScreen extends StatefulWidget {
   final DateTime startTime;
   final LatLng initialLocation;
 
+  /// Whether [initialLocation] is a real GPS fix (vs. the map's fallback
+  /// center) — see DriverActiveTrip.startTrip.
+  final bool hasRealFix;
+
   const DriverTripInProgressScreen({
     super.key,
     required this.route,
     required this.plateNumber,
     required this.startTime,
     required this.initialLocation,
+    this.hasRealFix = false,
   });
 
   @override
@@ -323,6 +438,22 @@ class _DriverTripInProgressScreenState
   final MapController _mapController = MapController();
 
   DriverActiveTrip get _activeTrip => DriverActiveTrip.instance;
+
+  // Keeps the camera on the jeepney as it drives, so the driver never ends up
+  // looking at an empty stretch of map while their marker (and the route
+  // ahead) moves off-screen. Turns itself off the moment the driver pans the
+  // map by hand, and back on with the recenter button.
+  bool _followingDriver = true;
+  LatLng? _lastFollowedLocation;
+
+  void _recenterOnDriver() {
+    final location = _activeTrip.currentLocation ?? widget.initialLocation;
+    setState(() => _followingDriver = true);
+    _lastFollowedLocation = location;
+    try {
+      _mapController.move(location, 16);
+    } catch (_) {}
+  }
 
   @override
   void initState() {
@@ -344,6 +475,7 @@ class _DriverTripInProgressScreenState
         plateNumber: widget.plateNumber,
         startTime: widget.startTime,
         initialLocation: widget.initialLocation,
+        initialLocationIsReal: widget.hasRealFix,
       );
     } else {
       // If the trip is already active,
@@ -578,6 +710,23 @@ class _DriverTripInProgressScreenState
 
         final plateNumber = _activeTrip.plateNumber ?? widget.plateNumber;
 
+        // The route this trip is running — the one line the driver is meant
+        // to follow, in the direction they picked (Quiapo – Pasig is the
+        // Pasig – Quiapo path in reverse; see RoutePath).
+        final routePoints = RoutePath.forRoute(route);
+
+        if (_followingDriver &&
+            _activeTrip.hasRealFix &&
+            currentLocation != _lastFollowedLocation) {
+          _lastFollowedLocation = currentLocation;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted || !_followingDriver) return;
+            try {
+              _mapController.move(currentLocation, _mapController.camera.zoom);
+            } catch (_) {}
+          });
+        }
+
         return Scaffold(
           backgroundColor: const Color(0xFFE5E7EB),
           body: Stack(
@@ -593,6 +742,13 @@ class _DriverTripInProgressScreenState
                     initialZoom: 16,
                     minZoom: 3,
                     maxZoom: 19,
+                    onPositionChanged: (camera, hasGesture) {
+                      // The driver dragged/zoomed the map themselves — stop
+                      // pulling the camera back to the jeepney.
+                      if (hasGesture && _followingDriver) {
+                        setState(() => _followingDriver = false);
+                      }
+                    },
                   ),
                   children: [
                     TileLayer(
@@ -610,11 +766,45 @@ class _DriverTripInProgressScreenState
                       ],
                     ),
 
+                    // The route to follow, origin to destination — drawn under
+                    // every marker so the jeepney and waiting-passenger pins
+                    // always sit on top of it.
+                    PolylineLayer(
+                      polylines: [
+                        Polyline(
+                          points: routePoints,
+                          strokeWidth: 5,
+                          color: AppColors.primary,
+                          borderStrokeWidth: 2,
+                          borderColor: AppColors.onPrimary,
+                        ),
+                      ],
+                    ),
+
                     MarkerLayer(
                       markers: [
+                        // Where this direction begins and ends.
+                        Marker(
+                          point: routePoints.first,
+                          width: 26,
+                          height: 26,
+                          child: const _RouteEndpointPin(
+                            icon: Icons.trip_origin_rounded,
+                            color: Color(0xFF15803D),
+                          ),
+                        ),
+                        Marker(
+                          point: routePoints.last,
+                          width: 26,
+                          height: 26,
+                          child: const _RouteEndpointPin(
+                            icon: Icons.flag_rounded,
+                            color: Color(0xFFDC2626),
+                          ),
+                        ),
+
                         // Waiting passenger stops — tap for distance + ETA
-                        // (see _showPassengerInfo); no full route line here
-                        // per the spec this feature was built from.
+                        // (see _showPassengerInfo).
                         for (final stop in _demandStops)
                           Marker(
                             point: stop.point,
@@ -843,6 +1033,35 @@ class _DriverTripInProgressScreenState
                 ),
 
               // =============================================================
+              // RECENTER — back onto the jeepney after panning away
+              // =============================================================
+              if (!_followingDriver)
+                Positioned(
+                  right: 16,
+                  bottom: 96,
+                  child: SafeArea(
+                    top: false,
+                    child: Material(
+                      color: Colors.white,
+                      shape: const CircleBorder(),
+                      elevation: 4,
+                      child: InkWell(
+                        customBorder: const CircleBorder(),
+                        onTap: _recenterOnDriver,
+                        child: const Padding(
+                          padding: EdgeInsets.all(12),
+                          child: Icon(
+                            Icons.my_location_rounded,
+                            size: 22,
+                            color: AppColors.logoBlue,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+              // =============================================================
               // END TRIP BUTTON
               // =============================================================
               Positioned(
@@ -883,6 +1102,33 @@ class _DriverTripInProgressScreenState
           ),
         );
       },
+    );
+  }
+}
+
+// ===========================================================================
+// ROUTE ENDPOINT PIN — the start/end of the route being driven
+// ===========================================================================
+
+class _RouteEndpointPin extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+
+  const _RouteEndpointPin({required this.icon, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        shape: BoxShape.circle,
+        border: Border.all(color: color, width: 2),
+        boxShadow: const [
+          BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 1)),
+        ],
+      ),
+      alignment: Alignment.center,
+      child: Icon(icon, size: 15, color: color),
     );
   }
 }

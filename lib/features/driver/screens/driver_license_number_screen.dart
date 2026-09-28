@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:camera/camera.dart';
@@ -49,28 +50,47 @@ class _DriverLicenseNumberScreenState extends State<DriverLicenseNumberScreen> {
     }
   }
 
+  // An admin can approve/reject this submission — or correct the license
+  // number on file — at any moment while this screen is open, so the status
+  // and number are re-read on a timer instead of only once at open (which
+  // left the old number showing until the driver backed out and came back).
+  Timer? _refreshTimer;
+
   @override
   void initState() {
     super.initState();
     _loadStatus();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 10), (_) => _loadStatus());
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadStatus() async {
+    // A submit in flight sets these itself from its own response; a poll
+    // landing mid-submit could briefly overwrite that with older data.
+    if (_isSubmitting) return;
     try {
       final response = await ApiClient.get(
         '/api/driver/me',
         token: DriverSession.instance.authToken,
       );
       final driver = response['driver'] as Map<String, dynamic>;
-      if (!mounted) return;
+      if (!mounted || _isSubmitting) return;
+      final status = driver['licenseVerificationStatus'] as String?;
+      final licenseNumber = driver['licenseNumber'] as String?;
+      if (!_isLoadingStatus && status == _status && licenseNumber == _licenseNumber) return;
       setState(() {
-        _status = driver['licenseVerificationStatus'] as String?;
-        _licenseNumber = driver['licenseNumber'] as String?;
+        _status = status;
+        _licenseNumber = licenseNumber;
         _isLoadingStatus = false;
       });
     } on ApiException {
       if (!mounted) return;
-      setState(() => _isLoadingStatus = false);
+      if (_isLoadingStatus) setState(() => _isLoadingStatus = false);
     }
   }
 

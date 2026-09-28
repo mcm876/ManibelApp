@@ -23,7 +23,7 @@ Node.js 20, Express 5, TypeScript, Prisma ORM 6.19 → PostgreSQL.
 
 ### Admin dashboard (`admin/`)
 React 19, TypeScript, Vite 8, Tailwind CSS 4, React Router 7,
-`leaflet`/`react-leaflet` (OpenStreetMap), `exceljs` (exports).
+`leaflet`/`react-leaflet` (OpenStreetMap), CSV exports (built in, no library).
 
 ### Landing page (`landing/`)
 A single static `index.html` — no framework, no build step.

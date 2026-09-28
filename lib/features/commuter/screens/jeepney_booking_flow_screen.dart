@@ -13,6 +13,8 @@ import '../../../core/constants/route_path.dart';
 import '../../../core/services/api_client.dart';
 import '../../../core/services/user_session.dart';
 import '../../../core/utils/distance_format.dart';
+import '../../../core/utils/live_location.dart';
+import '../../../core/utils/location_settings.dart';
 import '../../../core/widgets/app_avatar.dart';
 import 'commuter_history_screen.dart';
 import 'notifications_screen.dart';
@@ -29,62 +31,6 @@ String _formatHistoryDateTime(DateTime dt) {
   final period = dt.hour >= 12 ? 'PM' : 'AM';
   final minute = dt.minute.toString().padLeft(2, '0');
   return '${months[dt.month - 1]} ${dt.day}, ${dt.year} · $hour12:$minute $period';
-}
-
-// A fix worse than this (in meters) is treated as "still warming up"
-// rather than accepted outright — see _resolveCurrentLocation. Same
-// threshold as CommuterDashboardScreen's own copy of this constant.
-const double _acceptableAccuracyMeters = 100;
-
-/// Resolves the device's exact current GPS position, requesting permission
-/// if needed. Returns null (rather than throwing) if location services are
-/// off or permission is denied, so callers can fall back to a default
-/// center instead of crashing the booking flow over a permissions issue.
-Future<LatLng?> _resolveCurrentLocation() async {
-  final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-  if (!serviceEnabled) return null;
-
-  LocationPermission permission = await Geolocator.checkPermission();
-  if (permission == LocationPermission.denied) {
-    permission = await Geolocator.requestPermission();
-  }
-  if (permission == LocationPermission.denied ||
-      permission == LocationPermission.deniedForever) {
-    return null;
-  }
-
-  // A fresh install's very first fix is the most likely to time out (GPS
-  // radio hasn't warmed up yet) — one retry here is the difference between
-  // "first open lands on the fallback location" and just taking a couple
-  // seconds longer.
-  //
-  // The fused provider can also *succeed* immediately with a coarse
-  // network/cell-tower fix — easily off by kilometers — before GPS has had
-  // time to lock in, which is what actually makes the map look like it
-  // opened to someone else's location rather than a timeout or error. So a
-  // fix that comes back worse than [_acceptableAccuracyMeters] still gets
-  // accepted as a last resort, but only after retrying for a tighter one
-  // first — same fix as CommuterDashboardScreen's own
-  // _resolveCurrentLocation.
-  Position? position;
-  for (var attempt = 0; attempt < 3; attempt++) {
-    try {
-      final candidate = await Geolocator.getCurrentPosition(
-        locationSettings: LocationSettings(
-          accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 12 + attempt * 4),
-        ),
-      );
-      position = candidate;
-      if (candidate.accuracy <= _acceptableAccuracyMeters || attempt == 2) break;
-      await Future.delayed(const Duration(seconds: 1));
-    } catch (_) {
-      if (attempt == 2) return null;
-      await Future.delayed(const Duration(seconds: 1));
-    }
-  }
-  if (position == null) return null;
-  return LatLng(position.latitude, position.longitude);
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +129,10 @@ class _JeepneyOption {
 /// boarding was recorded some other way).
 class ResumedTrip {
   final String tripId;
+
+  /// The specific ride (backend TripBoarding.id) — what Cancel Ride and Trip
+  /// History key off. Null only if an older backend didn't send it.
+  final String? boardingId;
   final String route;
   final String driverName;
   final String plateNumber;
@@ -193,6 +143,7 @@ class ResumedTrip {
 
   const ResumedTrip({
     required this.tripId,
+    this.boardingId,
     required this.route,
     required this.driverName,
     required this.plateNumber,
@@ -223,13 +174,33 @@ class JeepneyBookingFlowScreen extends StatefulWidget {
 
 class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
     with SingleTickerProviderStateMixin {
-  // Fallback used only until the real GPS fix comes in (or if location is
-  // unavailable/denied) — not the source of truth once _center is set.
+  // Where the map *camera* points until the real GPS fix comes in (or if
+  // location is unavailable/denied) — only ever a place to look, never a
+  // position the commuter is shown at or that gets sent to the backend.
   static const _fallbackCenter = LatLng(14.6019, 121.0355);
 
-  LatLng _center = _fallbackCenter;
+  /// The commuter's real, current GPS position — null until the first fix
+  /// arrives (or forever, if location is off/denied). Kept current by
+  /// [_positionSubscription] for as long as this screen is open, so the
+  /// marker follows them as they walk. Deliberately never falls back to a
+  /// made-up coordinate: an unknown position is shown as unknown (no marker),
+  /// and nothing is sent to the backend from it.
+  LatLng? _userLocation;
+  double? _userAccuracyMeters;
+
+  /// Set when location can't be used (services off, permission denied) —
+  /// drives the banner telling the commuter how to fix it.
+  LocationAccess _locationAccess = LocationAccess.granted;
+
+  StreamSubscription<Position>? _positionSubscription;
   bool _locatingUser = false;
   final MapController _mapController = MapController();
+  bool _mapReady = false;
+
+  /// Whether the camera has already been centered on the commuter's real
+  /// position once — so the first real fix pulls the map to them, but later
+  /// fixes only move the marker and leave the camera wherever they've panned.
+  bool _cameraCenteredOnUser = false;
 
   _BookingStep _step = _BookingStep.routeAndCompanions;
 
@@ -309,7 +280,7 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
   @override
   void initState() {
     super.initState();
-    _locateUser(moveMap: false); // seed with the real location before the user interacts with the map
+    _initLocation();
 
     final resumed = widget.resumedTrip;
     if (resumed != null) {
@@ -324,35 +295,110 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
         photoUrl: resumed.photoUrl,
       );
       _boardedTripId = resumed.tripId;
+      _boardedBoardingId = resumed.boardingId;
       _step = _BookingStep.boardingStatus;
       _startBoardingStatusPoll();
     }
   }
 
+  // Checks/asks for location access, then starts the live position stream
+  // (so the marker keeps following the commuter) and, in parallel, asks for
+  // one quick precise fix so the map doesn't sit on the fallback while the
+  // stream warms up.
+  Future<void> _initLocation() async {
+    final access = await ensureLocationAccess();
+    if (!mounted) return;
+    setState(() => _locationAccess = access);
+    if (access != LocationAccess.granted) return;
+
+    _startLiveLocation();
+    _locateUser(moveMap: false);
+  }
+
+  void _startLiveLocation() {
+    _positionSubscription?.cancel();
+    _positionSubscription = livePositionStream(distanceFilterMeters: 3).listen(
+      (position) => _applyUserFix(position),
+      onError: (_) {
+        // The stream itself failed (e.g. location services got switched off
+        // mid-session) — surface it instead of leaving the marker frozen
+        // with no explanation.
+        if (!mounted) return;
+        setState(() => _locationAccess = LocationAccess.serviceDisabled);
+      },
+    );
+  }
+
+  /// Accepts one new reading of where the commuter is: moves their marker,
+  /// pulls the camera to them the first time, and lets a still-searching
+  /// commuter's waiting signal follow them (see [_maybeResendDemandSignal]).
+  void _applyUserFix(Position position) {
+    if (!mounted) return;
+    final point = LatLng(position.latitude, position.longitude);
+    setState(() {
+      _userLocation = point;
+      _userAccuracyMeters = position.accuracy;
+      _locationAccess = LocationAccess.granted;
+    });
+
+    // While riding, the camera follows the jeepney (see the glide
+    // controller's listener) — not the commuter's own phone position.
+    if (_step != _BookingStep.boardingStatus) _centerCameraOnUserOnce(point);
+    _maybeResendDemandSignal(point);
+  }
+
+  void _centerCameraOnUserOnce(LatLng point) {
+    if (_cameraCenteredOnUser || !_mapReady) return;
+    try {
+      _mapController.move(point, 16);
+      _cameraCenteredOnUser = true;
+    } catch (_) {
+      // Map not laid out yet — onMapReady retries.
+    }
+  }
+
+  /// The "locate me" button, and the quick first fix at open. The stream
+  /// above is what keeps the marker current afterwards.
   Future<void> _locateUser({bool moveMap = true}) async {
     if (_locatingUser) return;
     setState(() => _locatingUser = true);
 
-    final resolved = await _resolveCurrentLocation();
+    if (_locationAccess != LocationAccess.granted || moveMap) {
+      final access = await ensureLocationAccess();
+      if (!mounted) return;
+      _locationAccess = access;
+      if (access == LocationAccess.granted && _positionSubscription == null) {
+        _startLiveLocation();
+      }
+    }
+
+    final position = _locationAccess == LocationAccess.granted ? await resolveCurrentPosition() : null;
 
     if (!mounted) return;
     setState(() => _locatingUser = false);
 
-    if (resolved == null) {
+    if (position == null) {
       if (moveMap) {
         // Only surface this when the user explicitly tapped "locate me" —
         // silently keeping the fallback on the initial auto-locate avoids
         // an unprompted permission-denied snackbar on screen load.
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not get your exact location. Check location permissions.')),
+          SnackBar(
+            content: Text(
+              _locationAccess == LocationAccess.granted
+                  ? 'Could not get your exact location yet. Try again in a moment.'
+                  : locationAccessMessage(_locationAccess),
+            ),
+          ),
         );
       }
       return;
     }
 
-    setState(() => _center = resolved);
+    _applyUserFix(position);
     if (moveMap) {
-      _mapController.move(resolved, _mapController.camera.zoom);
+      _mapController.move(LatLng(position.latitude, position.longitude), _mapController.camera.zoom);
+      _cameraCenteredOnUser = true;
     }
   }
 
@@ -414,12 +460,32 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
   // commuter_dashboard_screen.dart) — no confirmation needed here.
   void _handleCloseButton() => Navigator.of(context).pop();
 
-  Future<void> _startFindingJeepneys(LatLng position) async {
+  Future<void> _startFindingJeepneys() async {
     _goTo(_BookingStep.findingJeepneys);
     setState(() {
       _isLoadingNearby = true;
       _nearbyError = null;
     });
+
+    // Nearby jeepneys are looked up *from the commuter's real position* —
+    // never from a stand-in coordinate, which would list (or hide) jeepneys
+    // relative to somewhere they aren't. If the first fix hasn't landed yet,
+    // give it one chance before giving up with an explanation.
+    var position = _userLocation;
+    if (position == null) {
+      await _locateUser(moveMap: false);
+      position = _userLocation;
+    }
+    if (!mounted) return;
+    if (position == null) {
+      setState(() {
+        _isLoadingNearby = false;
+        _nearbyError = _locationAccess == LocationAccess.granted
+            ? "We can't find your location yet. Move to an open area, then try again."
+            : locationAccessMessage(_locationAccess);
+      });
+      return;
+    }
 
     try {
       final route = _selectedRoute;
@@ -483,9 +549,10 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
   void _startProximityPolling() {
     _proximityPollTimer?.cancel();
     _proximityPollTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
-      await _locateUser(moveMap: false);
+      // No separate GPS request needed — the live stream (see
+      // _startLiveLocation) has already kept _userLocation current.
       if (!mounted) return;
-      await _startFindingJeepneys(_center);
+      await _startFindingJeepneys();
     });
   }
 
@@ -532,13 +599,13 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
     final tracked = _selectedJeepney;
     if (tracked == null || tracked.tripId == null || _step != _BookingStep.findingJeepneys) return;
 
-    await _locateUser(moveMap: false);
-    if (!mounted || _selectedJeepney?.tripId != tracked.tripId) return;
+    final from = _userLocation;
+    if (from == null) return;
 
     try {
       final response = await ApiClient.get(
         '/api/commuter/jeepney-route'
-        '?tripId=${tracked.tripId}&lat=${_center.latitude}&lng=${_center.longitude}',
+        '?tripId=${tracked.tripId}&lat=${from.latitude}&lng=${from.longitude}',
         token: UserSession.instance.authToken,
       );
       if (!mounted || _selectedJeepney?.tripId != tracked.tripId) return;
@@ -590,13 +657,26 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
     _demandSignalKeepAliveTimer = Timer.periodic(const Duration(minutes: 2), (_) => _sendDemandSignal());
   }
 
+  // Where the waiting signal was last sent from, and when — so it can be
+  // re-sent as the commuter walks (see _maybeResendDemandSignal) instead of
+  // staying pinned to wherever they stood when they first picked a route.
+  LatLng? _lastDemandSignalPoint;
+  DateTime? _lastDemandSignalAt;
+
   void _sendDemandSignal() {
+    // No real position yet — nothing honest to report. The keep-alive timer
+    // (or the next fix, see _maybeResendDemandSignal) tries again.
+    final point = _userLocation;
+    if (point == null) return;
+
+    _lastDemandSignalPoint = point;
+    _lastDemandSignalAt = DateTime.now();
     unawaited(
       ApiClient.post(
         '/api/commuter/demand-signals',
         {
-          'lat': _center.latitude,
-          'lng': _center.longitude,
+          'lat': point.latitude,
+          'lng': point.longitude,
           if (_selectedRoute != null) 'route': _selectedRoute,
           'partySize': _totalRiders,
         },
@@ -605,10 +685,33 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
     );
   }
 
+  // The backend refreshes the commuter's one outstanding signal *in place*
+  // (see POST /demand-signals), so re-sending never creates a duplicate — it
+  // just moves the pin drivers and admins see. Sent again once the commuter
+  // has moved a meaningful distance (but no more than every 15s), so a
+  // commuter walking to a better pickup spot is shown there, not where they
+  // started; the 2-minute keep-alive still covers a commuter standing still.
+  static const double _demandSignalMoveMeters = 30;
+  static const Duration _demandSignalMinInterval = Duration(seconds: 15);
+
+  void _maybeResendDemandSignal(LatLng point) {
+    if (_demandSignalKeepAliveTimer == null) return; // not currently searching
+    final lastPoint = _lastDemandSignalPoint;
+    final lastAt = _lastDemandSignalAt;
+    if (lastPoint != null && lastAt != null) {
+      final moved = const Distance()(lastPoint, point);
+      if (moved < _demandSignalMoveMeters) return;
+      if (DateTime.now().difference(lastAt) < _demandSignalMinInterval) return;
+    }
+    _sendDemandSignal();
+  }
+
   void _stopDemandSignalKeepAlive() {
     if (_demandSignalKeepAliveTimer == null) return;
     _demandSignalKeepAliveTimer?.cancel();
     _demandSignalKeepAliveTimer = null;
+    _lastDemandSignalPoint = null;
+    _lastDemandSignalAt = null;
 
     // They were actively looking and now aren't — tell the backend so a
     // driver's map doesn't keep showing them as "still waiting" for
@@ -749,6 +852,13 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
   // was a real bug, not just a cosmetic one.
   Future<void> _boardByTripId(_JeepneyOption jeepney) async {
     if (jeepney.tripId == null) return;
+    final here = _userLocation;
+    if (here == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Waiting for your GPS location — try again in a moment.')),
+      );
+      return;
+    }
     setState(() => _selectedJeepney = jeepney);
 
     try {
@@ -756,8 +866,8 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
         '/api/commuter/board',
         {
           'tripId': jeepney.tripId,
-          'lat': _center.latitude,
-          'lng': _center.longitude,
+          'lat': here.latitude,
+          'lng': here.longitude,
           'riders': _totalRiders,
         },
         token: UserSession.instance.authToken,
@@ -771,7 +881,7 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
       // Resume watching rather than leaving the commuter stuck with
       // polling stopped and no path forward except manually backing out.
-      _startFindingJeepneys(_center);
+      _startFindingJeepneys();
     }
   }
 
@@ -829,12 +939,19 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
       // entry, no fare, and their demand signal (see fulfilledAt's doc
       // comment in schema.prisma) staying stuck as "still waiting"
       // forever since the thing that clears it never ran.
+      final here = _userLocation;
+      if (here == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Waiting for your GPS location — try again in a moment.')),
+        );
+        return;
+      }
       final boardResponse = await ApiClient.post(
         '/api/commuter/board',
         {
           'qrToken': token,
-          'lat': _center.latitude,
-          'lng': _center.longitude,
+          'lat': here.latitude,
+          'lng': here.longitude,
           'riders': _totalRiders,
         },
         token: UserSession.instance.authToken,
@@ -902,6 +1019,86 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
 
     _recordTripInHistory();
     _goTo(_BookingStep.tripCompleted);
+  }
+
+  // Backs out of a ride the commuter boarded but didn't actually take — e.g.
+  // they confirmed the wrong jeepney, or it left without them. Distinct from
+  // End Trip: that's "I rode it and I'm getting off" (completed, then rate/
+  // report); this is "I never really rode it" (cancelled — kept in Trip
+  // History, labeled Cancelled, and no longer counted as a passenger on the
+  // driver's jeepney or on the admin's Passenger Monitoring).
+  bool _isCancellingRide = false;
+
+  Future<void> _handleCancelRide() async {
+    if (_isCancellingRide) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text(
+          'Cancel this ride?',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+        ),
+        content: const Text(
+          "Use this if you didn't actually ride the jeepney. It will be saved "
+          'in your history as Cancelled, and you will no longer be counted as '
+          'a passenger.',
+          style: TextStyle(fontSize: 13, color: Colors.black54, height: 1.35),
+        ),
+        actionsPadding: const EdgeInsets.only(right: 12, bottom: 8),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text(
+              'Keep Ride',
+              style: TextStyle(color: Colors.black54, fontWeight: FontWeight.w700),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.errorRed,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            child: const Text('Cancel Ride', style: TextStyle(fontWeight: FontWeight.w800)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _isCancellingRide = true);
+    try {
+      await ApiClient.post(
+        '/api/commuter/board/cancel',
+        {if (_boardedBoardingId != null) 'boardingId': _boardedBoardingId},
+        token: UserSession.instance.authToken,
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _isCancellingRide = false);
+      // Most likely the ride already ended (the driver finished the trip
+      // first) — the boarding-status poll notices that on its own and moves
+      // to the completed step; either way, say what happened.
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      return;
+    }
+    if (!mounted) return;
+
+    _stopBoardingStatusPoll();
+    // Kept, not deleted — shows up in Trip History as Cancelled.
+    _recordTripInHistory(status: TripHistoryStatus.cancelled);
+
+    // Back to the dashboard: the commuter isn't on a jeepney anymore, so its
+    // own live map (their real position, no active-trip banner — the
+    // dashboard re-checks on return) is exactly the right place to land.
+    Navigator.of(context).popUntil((route) => route.isFirst);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Ride cancelled. It was saved in your history.')),
+    );
   }
 
   // While genuinely on board, checks every few seconds whether the *driver*
@@ -981,7 +1178,7 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
   // /alight call in _handleEndTrip above), fetched the same way every
   // other server-triggered notification is — no local push needed here
   // anymore.
-  void _recordTripInHistory() {
+  void _recordTripInHistory({TripHistoryStatus status = TripHistoryStatus.completed}) {
     final jeepney = _selectedJeepney;
     final route = _selectedRoute;
     if (jeepney == null || route == null) return;
@@ -1003,6 +1200,7 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
         riders: _totalRiders,
         dateTime: _formatHistoryDateTime(now),
         boardedAt: now,
+        status: status,
       ),
     );
   }
@@ -1073,8 +1271,26 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
     );
   }
 
+  /// Whether the commuter is on the jeepney right now *and* the jeepney's
+  /// live position is known — i.e. the moment their marker should ride along
+  /// with it instead of sitting at their own phone's position.
+  bool get _isRidingJeepney => _step == _BookingStep.boardingStatus && _boardedJeepneyPosition != null;
+
+  /// Where the ONE commuter marker belongs right now:
+  ///  - before boarding (and again after the ride completes or is cancelled):
+  ///    their own real GPS position;
+  ///  - while boarded: the jeepney's live position, so the marker moves with
+  ///    it instead of being left behind at the spot they boarded.
+  /// Null when there's nothing honest to show yet (no GPS fix, not boarded) —
+  /// the marker is simply omitted rather than drawn at a made-up place.
+  LatLng? get _commuterMarkerPoint {
+    if (_isRidingJeepney) return _glidePosition(_boardedGlideKey, _boardedJeepneyPosition!);
+    return _userLocation;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final commuterPoint = _commuterMarkerPoint;
     return Scaffold(
       backgroundColor: const Color(0xFFE9ECEE),
       body: Stack(
@@ -1083,10 +1299,18 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
             child: FlutterMap(
               mapController: _mapController,
               options: MapOptions(
-                initialCenter: _center,
+                initialCenter: _userLocation ?? _fallbackCenter,
                 initialZoom: 14.5,
                 minZoom: 3,
                 maxZoom: 19,
+                // The first real fix can land before the map is laid out —
+                // this is what actually pulls the camera to the commuter in
+                // that case, instead of leaving it on the fallback area.
+                onMapReady: () {
+                  _mapReady = true;
+                  final here = _userLocation;
+                  if (here != null && _step != _BookingStep.boardingStatus) _centerCameraOnUserOnce(here);
+                },
               ),
               children: [
                 TileLayer(
@@ -1114,11 +1338,11 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
                         color: _kYellowDark,
                       ),
                       for (final jeepney in _nearbyJeepneys)
-                        if (jeepney.position != null)
+                        if (jeepney.position != null && _userLocation != null)
                           Polyline(
                             points: RoutePath.trailBetween(
                               jeepney.position!,
-                              _center,
+                              _userLocation!,
                               route: _selectedRoute,
                             ),
                             strokeWidth: jeepney.plateNumber == _selectedJeepney?.plateNumber ? 5 : 3,
@@ -1130,20 +1354,33 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
                   ),
                 MarkerLayer(
                   markers: [
-                    Marker(
-                      point: _center,
-                      width: 28,
-                      height: 28,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: _kBlue,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 3),
-                        ),
-                        alignment: Alignment.center,
-                        child: const Icon(Icons.person_rounded, size: 15, color: Colors.white),
+                    // The one commuter marker — see _commuterMarkerPoint for
+                    // where it goes (their own GPS position, or the jeepney
+                    // once boarded). Always the same Marker, updated in place
+                    // as the point changes — never a second one left behind.
+                    if (commuterPoint != null)
+                      Marker(
+                        point: commuterPoint,
+                        width: _isRidingJeepney ? 38 : 28,
+                        height: _isRidingJeepney ? 38 : 28,
+                        child: _isRidingJeepney
+                            ? const _RiderOnJeepneyPin()
+                            : Container(
+                                decoration: BoxDecoration(
+                                  // Grey until the reading is a real, precise
+                                  // GPS lock — a coarse cell-tower guess can
+                                  // be kilometers off and shouldn't look
+                                  // like an exact position.
+                                  color: (_userAccuracyMeters ?? double.infinity) <= kPreciseFixMeters
+                                      ? _kBlue
+                                      : Colors.black38,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: Colors.white, width: 3),
+                                ),
+                                alignment: Alignment.center,
+                                child: const Icon(Icons.person_rounded, size: 15, color: Colors.white),
+                              ),
                       ),
-                    ),
                     // Live jeepney positions while actively searching — see
                     // _startFindingJeepneys. Only meaningful during that
                     // step; _nearbyJeepneys is empty everywhere else, so
@@ -1162,20 +1399,12 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
                               ),
                             ),
                           ),
-                    // The boarded jeepney's live position while riding —
-                    // see _pollActiveTrip, which refreshes this every 5s
-                    // from the same currentLat/currentLng the driver's own
-                    // location pings keep fresh — glided smoothly between
-                    // fixes (see _glidePosition) instead of jumping, so it
-                    // actually looks like it's moving on the map rather
-                    // than teleporting once every 5 seconds.
-                    if (_step == _BookingStep.boardingStatus && _boardedJeepneyPosition != null)
-                      Marker(
-                        point: _glidePosition(_boardedGlideKey, _boardedJeepneyPosition!),
-                        width: 30,
-                        height: 30,
-                        child: const _JeepneyMapPin(selected: true),
-                      ),
+                    // While riding there's no separate jeepney marker: the commuter
+                    // marker above *is* the jeepney's position (see
+                    // _commuterMarkerPoint / _RiderOnJeepneyPin) — glided
+                    // smoothly between the 5s position fixes from
+                    // _pollActiveTrip (see _glidePosition) instead of
+                    // teleporting, so it looks like it's actually moving.
                   ],
                 ),
               ],
@@ -1201,6 +1430,51 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
               ),
             ),
           ),
+
+          // Location can't be used — say so, and make the fix one tap away,
+          // instead of leaving the commuter looking at a map with no marker
+          // and no explanation.
+          if (_locationAccess != LocationAccess.granted)
+            SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 64, left: 16, right: 16),
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  child: Material(
+                    color: const Color(0xFFFFF1F1),
+                    borderRadius: BorderRadius.circular(14),
+                    elevation: 2,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: () => openRelevantLocationSettings(
+                        isServiceDisabled: _locationAccess == LocationAccess.serviceDisabled,
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.location_off_rounded, color: Color(0xFFE23F3F), size: 18),
+                            const SizedBox(width: 8),
+                            Flexible(
+                              child: Text(
+                                locationAccessMessage(_locationAccess),
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF7A1F1F),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
 
           Align(
             alignment: Alignment.bottomCenter,
@@ -1290,7 +1564,7 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
           onTotalRidersChanged: _setTotalRiders,
           onContinue: _selectedRoute == null
               ? null
-              : () => _startFindingJeepneys(_center),
+              : _startFindingJeepneys,
         );
 
       case _BookingStep.findingJeepneys:
@@ -1298,7 +1572,7 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
           jeepneys: _nearbyJeepneys,
           isLoading: _isLoadingNearby,
           error: _nearbyError,
-          onRetry: () => _startFindingJeepneys(_center),
+          onRetry: _startFindingJeepneys,
           selected: _selectedJeepney,
           onSelect: _selectJeepneyForTracking,
           onBack: () {
@@ -1326,7 +1600,7 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
           onScan: _handleScanQr,
           onBack: () {
             _goTo(_BookingStep.findingJeepneys);
-            _startFindingJeepneys(_center);
+            _startFindingJeepneys();
           },
         );
 
@@ -1336,6 +1610,7 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
           jeepney: _selectedJeepney!,
           riders: _totalRiders,
           onEndTrip: _handleEndTrip,
+          onCancelRide: _isCancellingRide ? null : _handleCancelRide,
         );
 
       case _BookingStep.tripCompleted:
@@ -1354,6 +1629,7 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
 
   @override
   void dispose() {
+    _positionSubscription?.cancel();
     _stopProximityPolling();
     _stopBoardingStatusPoll();
     _mapController.dispose();
@@ -1415,6 +1691,51 @@ class _JeepneyMapPin extends StatelessWidget {
       ),
       alignment: Alignment.center,
       child: const Icon(Icons.directions_bus_filled_rounded, size: 16, color: Colors.white),
+    );
+  }
+}
+
+/// The commuter's marker while they're on the jeepney: the jeepney glyph with
+/// a small "rider" badge, so the one marker reads as "you, on this jeepney"
+/// and moves wherever the jeepney does.
+class _RiderOnJeepneyPin extends StatelessWidget {
+  const _RiderOnJeepneyPin();
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Positioned.fill(
+          child: Container(
+            decoration: BoxDecoration(
+              color: _kBlue,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 3),
+              boxShadow: [
+                BoxShadow(color: _kBlue.withValues(alpha: 0.4), blurRadius: 6, spreadRadius: 1),
+              ],
+            ),
+            alignment: Alignment.center,
+            child: const Icon(Icons.directions_bus_filled_rounded, size: 18, color: Colors.white),
+          ),
+        ),
+        Positioned(
+          right: -5,
+          top: -5,
+          child: Container(
+            width: 17,
+            height: 17,
+            decoration: BoxDecoration(
+              color: _kYellow,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 1.5),
+            ),
+            alignment: Alignment.center,
+            child: const Icon(Icons.person_rounded, size: 11, color: _kBlueDark),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -2211,11 +2532,15 @@ class _BoardingStatusStep extends StatelessWidget {
   final int riders;
   final VoidCallback onEndTrip;
 
+  /// Null while a cancel is already in flight (disables the button).
+  final VoidCallback? onCancelRide;
+
   const _BoardingStatusStep({
     required this.route,
     required this.jeepney,
     required this.riders,
     required this.onEndTrip,
+    required this.onCancelRide,
   });
 
   @override
@@ -2293,6 +2618,21 @@ class _BoardingStatusStep extends StatelessWidget {
               'End Trip',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, letterSpacing: 0.5),
             ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        _OutlinedActionButton(
+          label: 'Cancel Ride',
+          icon: Icons.close_rounded,
+          color: AppColors.errorRed,
+          onTap: onCancelRide,
+        ),
+        const SizedBox(height: 4),
+        const Center(
+          child: Text(
+            "Didn't ride this jeepney? Cancel instead of ending the trip.",
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 11, color: Colors.black38, fontWeight: FontWeight.w500),
           ),
         ),
       ],
