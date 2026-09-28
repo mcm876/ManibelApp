@@ -7,8 +7,8 @@ import '../../../core/services/driver_operations_log.dart';
 import '../widgets/day_expense_chart.dart';
 
 /// Rolls up a chosen calendar month's [DriverOperationsLog] entries into
-/// totals, averages, a week-by-week net income chart, and a "best day"
-/// performance callout. Defaults to the current month; prev/next arrows
+/// totals, averages, a week-by-week net income chart (tap a week for its
+/// revenue and expense breakdown), and a "best day" performance callout. Defaults to the current month; prev/next arrows
 /// let the driver page back through earlier months.
 class DriverMonthlyAnalyticsScreen extends StatefulWidget {
   const DriverMonthlyAnalyticsScreen({super.key});
@@ -39,9 +39,10 @@ class _DriverMonthlyAnalyticsScreenState
   // positive (into the future).
   int _monthOffset = 0;
 
-  /// The day whose bar was tapped — its expenses are shown below the daily
-  /// chart. Cleared whenever the driver pages to another month.
-  DateTime? _selectedDay;
+  /// The week (1-based) whose bar was tapped — its revenue and expenses are
+  /// shown below the chart. Cleared whenever the driver pages to another
+  /// month.
+  int? _selectedWeek;
 
   /// False until the first sync from the backend has finished, so a tapped
   /// day with no cached entry reads "Loading…" rather than "no expenses".
@@ -85,20 +86,20 @@ class _DriverMonthlyAnalyticsScreenState
 
   void _goToPreviousMonth() => setState(() {
     _monthOffset -= 1;
-    _selectedDay = null;
+    _selectedWeek = null;
   });
 
   void _goToNextMonth() {
     if (_monthOffset >= 0) return;
     setState(() {
       _monthOffset += 1;
-      _selectedDay = null;
+      _selectedWeek = null;
     });
   }
 
-  void _selectDay(DateTime day) => setState(() => _selectedDay = day);
+  void _selectWeek(int week) => setState(() => _selectedWeek = week);
 
-  void _clearSelection() => setState(() => _selectedDay = null);
+  void _clearSelection() => setState(() => _selectedWeek = null);
 
   void _retrySync() {
     setState(() => _initialSyncDone = false);
@@ -200,16 +201,13 @@ class _DriverMonthlyAnalyticsScreenState
       (a, b) => a.netIncome >= b.netIncome ? a : b,
     );
 
-    // Bucket entries into week-of-month (1-5) for the chart.
-    final weeklyNet = List<double>.filled(5, 0);
-    for (final e in entries) {
-      final weekIndex = ((e.date.day - 1) ~/ 7).clamp(0, 4);
-      weeklyNet[weekIndex] += e.netIncome;
-    }
-    final maxWeekly = weeklyNet.fold<double>(
-      0,
-      (max, v) => v.abs() > max ? v.abs() : max,
-    );
+    // One summary per week of the month (Week 1 = days 1-7, Week 2 = 8-14, …;
+    // see WeekSummary). The bars and the details card both read these same
+    // objects, so a bar's value and its breakdown can never disagree.
+    final weeks = summarizeMonthWeeks(_selectedMonth, entries);
+    final selectedWeek = _selectedWeek == null
+        ? null
+        : weeks.where((w) => w.number == _selectedWeek).firstOrNull;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -301,40 +299,9 @@ class _DriverMonthlyAnalyticsScreenState
           'Net Income by Week',
           style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
         ),
-        const SizedBox(height: 12),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.fromLTRB(12, 20, 12, 12),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0xFFE1E4E8)),
-          ),
-          child: SizedBox(
-            height: 150,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                for (int i = 0; i < weeklyNet.length; i++)
-                  Expanded(
-                    child: _WeekBar(
-                      label: 'Wk${i + 1}',
-                      net: weeklyNet[i],
-                      maxMagnitude: maxWeekly,
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 20),
-        const Text(
-          'Net Income by Day',
-          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
-        ),
         const SizedBox(height: 4),
         const Text(
-          'Tap a day to see its expenses.',
+          'Tap a week to see its revenue and expenses.',
           style: TextStyle(fontSize: 10, color: Colors.black45, fontWeight: FontWeight.w500),
         ),
         const SizedBox(height: 10),
@@ -346,20 +313,16 @@ class _DriverMonthlyAnalyticsScreenState
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: const Color(0xFFE1E4E8)),
           ),
-          child: DayBarsChart(
-            // One bar per calendar day of the selected month, each carrying
-            // its own date, so a tap resolves to that exact date.
-            days: _dailyBars(entries),
-            selectedDate: _selectedDay,
-            onSelect: _selectDay,
-            barWidth: 6,
+          child: WeekBarsChart(
+            weeks: weeks,
+            selectedWeek: _selectedWeek,
+            onSelect: _selectWeek,
           ),
         ),
-        if (_selectedDay != null) ...[
+        if (selectedWeek != null) ...[
           const SizedBox(height: 12),
-          DayExpenseDetailsCard(
-            date: _selectedDay!,
-            entry: DriverOperationsLog.forDate(_selectedDay!),
+          WeekDetailsCard(
+            week: selectedWeek,
             isLoading: !_initialSyncDone,
             loadFailed: DriverOperationsLog.lastSyncFailed,
             onRetry: _retrySync,
@@ -398,26 +361,6 @@ class _DriverMonthlyAnalyticsScreenState
         ),
       ],
     );
-  }
-
-  /// One [DayBarData] per calendar day of the selected month (1st..last),
-  /// matched to that day's logged entry by exact date. Labels are sparse (the
-  /// 1st and every 5th) so 31 thin bars stay readable.
-  List<DayBarData> _dailyBars(List<DriverOperationsEntry> entries) {
-    final month = _selectedMonth;
-    final daysInMonth = _selectedMonthEnd.day;
-    final entryByDay = <int, DriverOperationsEntry>{
-      for (final e in entries)
-        DateTime(e.date.year, e.date.month, e.date.day).millisecondsSinceEpoch: e,
-    };
-    return [
-      for (var d = 1; d <= daysInMonth; d++)
-        DayBarData(
-          date: DateTime(month.year, month.month, d),
-          label: (d == 1 || d % 5 == 0) ? '$d' : '',
-          entry: entryByDay[DateTime(month.year, month.month, d).millisecondsSinceEpoch],
-        ),
-    ];
   }
 
   Widget _buildHeader(BuildContext context, DateTime month) {
@@ -503,51 +446,6 @@ class _MonthNavButton extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _WeekBar extends StatelessWidget {
-  final String label;
-  final double net;
-  final double maxMagnitude;
-
-  const _WeekBar({
-    required this.label,
-    required this.net,
-    required this.maxMagnitude,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final hasData = net != 0;
-    final ratio = maxMagnitude > 0
-        ? (net.abs() / maxMagnitude).clamp(0.05, 1.0)
-        : 0.0;
-    final barHeight = hasData ? (ratio * 100).clamp(4.0, 100.0) : 4.0;
-    final barColor = net >= 0 ? AppColors.logoBlue : const Color(0xFFE23F3F);
-
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.end,
-      children: [
-        Container(
-          width: 22,
-          height: barHeight,
-          decoration: BoxDecoration(
-            color: hasData ? barColor : const Color(0xFFE6E6E7),
-            borderRadius: BorderRadius.circular(6),
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.w700,
-            color: Colors.black54,
-          ),
-        ),
-      ],
     );
   }
 }
