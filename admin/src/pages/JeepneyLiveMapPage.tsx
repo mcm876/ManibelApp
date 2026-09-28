@@ -37,12 +37,16 @@ function SearchIcon() {
   );
 }
 
-/** Every jeepney with a known last position from *today* — online
- * (currently on a trip, live-ish position) and offline (showing wherever
- * it last reported from) alike, since "View Location" from Jeepney
- * Monitoring needs to work for both. A jeepney whose last ping was on an
- * earlier date is excluded rather than shown sitting at a stale spot,
- * which would misleadingly read as "still there." Sourced from GET
+/** Every jeepney with a known last position — online (currently on a trip,
+ * live-ish position) and offline (showing wherever it last reported from)
+ * alike, since "View Location" from Jeepney Monitoring needs to work for
+ * both. An *offline* jeepney whose last ping was on an earlier date is
+ * excluded rather than shown sitting at a stale spot, which would
+ * misleadingly read as "still there." An *online* one is never dropped for
+ * being old: a trip that is still in progress belongs on the map (its popup
+ * shows how long ago it last reported) — otherwise a trip running past
+ * midnight, or one whose phone briefly lost signal, would vanish while the
+ * driver is still very much on the road. Sourced from GET
  * /api/admin/jeepneys, the same one-row-per-driver endpoint that page's
  * table uses, not the active-trips-only /trips/active this page used to
  * read from. */
@@ -72,7 +76,13 @@ export default function JeepneyLiveMapPage() {
   const markers: JeepneyMarker[] = useMemo(
     () =>
       (jeepneys ?? [])
-        .filter((j) => j.lastLat != null && j.lastLng != null && j.lastLocationUpdatedAt != null && isManilaToday(j.lastLocationUpdatedAt))
+        .filter(
+          (j) =>
+            j.lastLat != null &&
+            j.lastLng != null &&
+            j.lastLocationUpdatedAt != null &&
+            (j.isOnline || isManilaToday(j.lastLocationUpdatedAt)),
+        )
         .map((j) => ({
           id: j.driverId,
           lat: j.lastLat!,
@@ -114,7 +124,7 @@ export default function JeepneyLiveMapPage() {
         <div>
           <p className="font-display text-sm font-bold text-white">Live Jeepney Map</p>
           <p className="text-xs text-white/60">
-            {jeepneys === null ? 'Loading…' : `${markers.length} jeepney(s) with a location updated today`}
+            {jeepneys === null ? 'Loading…' : `${markers.length} jeepney(s) on the map`}
           </p>
         </div>
       </header>
@@ -142,7 +152,7 @@ export default function JeepneyLiveMapPage() {
                 </div>
               ))}
             {jeepneys !== null && filtered.length === 0 && (
-              <p className="p-4 text-sm text-gray-400">No jeepneys with a location updated today.</p>
+              <p className="p-4 text-sm text-gray-400">No jeepneys with a known location right now.</p>
             )}
             {filtered.map((m) => (
               <button

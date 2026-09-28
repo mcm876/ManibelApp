@@ -16,6 +16,40 @@ import 'notifications_screen.dart';
 // HISTORY ITEM
 // ===========================================================================
 
+/// Where one ride stands — mirrors the backend's BoardingStatus (see
+/// TripBoarding in schema.prisma). A cancelled ride is a real history entry,
+/// not a deleted one: the commuter boarded, then backed out.
+enum TripHistoryStatus {
+  /// Still on board — the trip hasn't ended.
+  inProgress('In Progress'),
+  completed('Completed'),
+  cancelled('Cancelled');
+
+  final String label;
+  const TripHistoryStatus(this.label);
+
+  /// Maps the backend's BOARDED / COMPLETED / CANCELLED. Anything else (or
+  /// nothing — an older backend) reads as completed, which is what every
+  /// entry was before statuses existed.
+  static TripHistoryStatus fromBackend(String? value) {
+    switch (value) {
+      case 'CANCELLED':
+        return TripHistoryStatus.cancelled;
+      case 'BOARDED':
+        return TripHistoryStatus.inProgress;
+      default:
+        return TripHistoryStatus.completed;
+    }
+  }
+
+  static TripHistoryStatus fromStored(String? name) {
+    for (final s in TripHistoryStatus.values) {
+      if (s.name == name) return s;
+    }
+    return TripHistoryStatus.completed;
+  }
+}
+
 class TripHistoryItem {
   /// The real per-ride identity (backend TripBoarding.id) — [tripId] alone
   /// can't tell two rides on the same driver's Trip apart (out and back on
@@ -53,6 +87,9 @@ class TripHistoryItem {
   /// [CommuterHistoryScreen.syncFromBackend]).
   final int? myRating;
 
+  /// In progress / completed / cancelled — see [TripHistoryStatus].
+  final TripHistoryStatus status;
+
   const TripHistoryItem({
     required this.boardingId,
     required this.tripId,
@@ -66,7 +103,10 @@ class TripHistoryItem {
     this.driverAverageRating,
     this.driverRatingCount = 0,
     this.myRating,
+    this.status = TripHistoryStatus.completed,
   });
+
+  bool get isCancelled => status == TripHistoryStatus.cancelled;
 
   String get ridersLabel => '$riders passenger${riders == 1 ? '' : 's'}';
 
@@ -83,6 +123,7 @@ class TripHistoryItem {
     'driverAverageRating': driverAverageRating,
     'driverRatingCount': driverRatingCount,
     'myRating': myRating,
+    'status': status.name,
   };
 
   static TripHistoryItem _fromJson(Map<String, dynamic> json) =>
@@ -112,6 +153,8 @@ class TripHistoryItem {
         driverAverageRating: (json['driverAverageRating'] as num?)?.toDouble(),
         driverRatingCount: json['driverRatingCount'] as int? ?? 0,
         myRating: (json['myRating'] as num?)?.toInt(),
+        // Entries persisted before statuses existed were all completed rides.
+        status: TripHistoryStatus.fromStored(json['status'] as String?),
       );
 }
 
@@ -287,6 +330,10 @@ class CommuterHistoryScreen extends StatefulWidget {
                 ?.toDouble(),
             driverRatingCount: map['driverRatingCount'] as int? ?? 0,
             myRating: (map['myRating'] as num?)?.toInt() ?? existing?.myRating,
+            // Authoritative from the backend — this is what turns a ride the
+            // commuter cancelled (or one that's still in progress) into the
+            // right label, on this device or any other.
+            status: TripHistoryStatus.fromBackend(map['status'] as String?),
           );
 
           if (map['alreadyRated'] == true) _ratedTripIds.add(tripId);
@@ -548,7 +595,11 @@ class _TripHistoryCard extends StatelessWidget {
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0xFFE1E4E8)),
+            border: Border.all(
+              color: trip.isCancelled
+                  ? const Color(0xFFF3C5C5)
+                  : const Color(0xFFE1E4E8),
+            ),
           ),
 
           child: Row(
@@ -570,9 +621,10 @@ class _TripHistoryCard extends StatelessWidget {
                   children: [
                     Text(
                       trip.route,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w800,
+                        color: trip.isCancelled ? Colors.black45 : null,
                       ),
                     ),
 
@@ -596,6 +648,10 @@ class _TripHistoryCard extends StatelessWidget {
                         color: Colors.black38,
                       ),
                     ),
+
+                    const SizedBox(height: 6),
+
+                    _TripStatusChip(status: trip.status),
                   ],
                 ),
               ),
@@ -633,6 +689,65 @@ class _TripHistoryCard extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ===========================================================================
+// STATUS CHIP
+// ===========================================================================
+
+/// "Completed" / "Cancelled" / "In Progress" pill — colored so a cancelled
+/// ride is unmistakable next to completed ones at a glance.
+class _TripStatusChip extends StatelessWidget {
+  final TripHistoryStatus status;
+
+  const _TripStatusChip({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    final Color background;
+    final Color foreground;
+    final IconData icon;
+    switch (status) {
+      case TripHistoryStatus.cancelled:
+        background = const Color(0xFFFDE8E8);
+        foreground = const Color(0xFFB42318);
+        icon = Icons.cancel_rounded;
+        break;
+      case TripHistoryStatus.inProgress:
+        background = const Color(0xFFDBEAFE);
+        foreground = AppColors.logoBlue;
+        icon = Icons.directions_bus_rounded;
+        break;
+      case TripHistoryStatus.completed:
+        background = const Color(0xFFDCFCE7);
+        foreground = const Color(0xFF15803D);
+        icon = Icons.check_circle_rounded;
+        break;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 11, color: foreground),
+          const SizedBox(width: 4),
+          Text(
+            status.label,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+              color: foreground,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -927,6 +1042,10 @@ class _CommuterTripDetailsScreenState extends State<CommuterTripDetailsScreen> {
 
                         const SizedBox(height: 9),
 
+                        _ReceiptRow(label: 'Status', value: trip.status.label),
+
+                        const SizedBox(height: 9),
+
                         _ReceiptRow(label: 'Route', value: trip.route),
 
                         const SizedBox(height: 9),
@@ -1008,6 +1127,12 @@ class _CommuterTripDetailsScreenState extends State<CommuterTripDetailsScreen> {
 
             const SizedBox(height: 14),
 
+            // A ride that was cancelled (never ridden) or hasn't finished
+            // yet has nothing to rate or report — say why instead of showing
+            // controls the backend would reject.
+            if (trip.status != TripHistoryStatus.completed)
+              _TripNotRatableNote(status: trip.status)
+            else ...[
             // =========================================================
             // RATING
             // =========================================================
@@ -1165,8 +1290,56 @@ class _CommuterTripDetailsScreenState extends State<CommuterTripDetailsScreen> {
                 ),
               ),
             ),
+            ],
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Shown on Trip Details instead of the rate/report controls for a ride that
+/// can't be rated: one the commuter cancelled, or one still in progress.
+class _TripNotRatableNote extends StatelessWidget {
+  final TripHistoryStatus status;
+
+  const _TripNotRatableNote({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    final cancelled = status == TripHistoryStatus.cancelled;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: cancelled ? const Color(0xFFFDE8E8) : const Color(0xFFEAF1FF),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            cancelled ? Icons.info_outline_rounded : Icons.directions_bus_rounded,
+            size: 16,
+            color: cancelled ? const Color(0xFFB42318) : AppColors.logoBlue,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              cancelled
+                  ? 'You cancelled this ride, so it was not counted as a trip. '
+                      'There is nothing to rate or report.'
+                  : 'This trip is still in progress. You can rate your driver '
+                      'once it has ended.',
+              style: TextStyle(
+                fontSize: 11,
+                height: 1.35,
+                fontWeight: FontWeight.w600,
+                color: cancelled ? const Color(0xFF7A1F1F) : AppColors.logoBlue,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

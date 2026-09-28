@@ -25,6 +25,18 @@ enum TripStatus {
   COMPLETED
 }
 
+/// Where one commuter's ride on a driver's Trip stands — distinct from
+/// [TripStatus], which is the driver's whole shift. A commuter cancelling
+/// their own ride must never end the driver's trip, so this lives on
+/// TripBoarding, not Trip. BOARDED is the only "currently a passenger"
+/// state; COMPLETED and CANCELLED are both final and both stay in the
+/// commuter's history (a cancelled ride is never deleted).
+enum BoardingStatus {
+  BOARDED
+  COMPLETED
+  CANCELLED
+}
+
 /// Where a flagged trip stands in admin review. PENDING until an admin
 /// looks at it; REVIEWED is a neutral "looked at, no verdict yet" state
 /// distinct from the two verdicts (VALID/INVALID) — see POST
@@ -297,7 +309,20 @@ model TripBoarding {
   tripId     String
   commuterId String
   boardedAt  DateTime  @default(now())
+
+  /// When this boarding stopped counting as a passenger on the jeepney —
+  /// set for BOTH a completed ride (Para Po / driver ended the trip) and a
+  /// cancelled one, so every "is this commuter currently on board" check
+  /// (`alightedAt: null`) keeps working unchanged. Read [status] to tell
+  /// which of the two it was.
   alightedAt DateTime?
+
+  /// BOARDED until closed out; then COMPLETED (rode it) or CANCELLED (the
+  /// commuter tapped Cancel after boarding, e.g. never actually got on).
+  /// A cancelled boarding is kept, not deleted, so it still shows in Trip
+  /// History as Cancelled.
+  status      BoardingStatus @default(BOARDED)
+  cancelledAt DateTime?
 
   /// The commuter's own party size at the moment they boarded — sent by
   /// POST /board, mirrored server-side so this survives a reinstall/

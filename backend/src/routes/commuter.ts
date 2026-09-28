@@ -1192,6 +1192,9 @@ router.get('/active-trip', requireAuth('commuter'), async (req, res, next) => {
     res.json({
       activeTrip: {
         tripId: trip.id,
+        // The specific ride (see TripBoarding's doc comment) — what the app
+        // needs to cancel it or file it in Trip History.
+        boardingId: boarding.id,
         route: trip.route,
         driverName: driver.fullName,
         plateNumber: driver.plateNumber,
@@ -1349,7 +1352,7 @@ router.post('/alight', requireAuth('commuter'), async (req, res, next) => {
     });
     const updated = await prisma.tripBoarding.updateMany({
       where: { commuterId: req.auth!.sub, tripId: { in: activeTripIds }, alightedAt: null },
-      data: { alightedAt: new Date() },
+      data: { alightedAt: new Date(), status: 'COMPLETED' },
     });
 
     // Only when this call actually closed out a boarding — a stray/repeat
@@ -1365,6 +1368,71 @@ router.post('/alight', requireAuth('commuter'), async (req, res, next) => {
     }
 
     res.json({ alighted: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// A commuter backing out after boarding — they scanned/confirmed a jeepney
+// but didn't actually ride it. Distinct from /alight above: that's "I rode it
+// and I'm getting off" (COMPLETED, prompts a rating), this is "I never really
+// took this ride" (CANCELLED, nothing to rate or report).
+//
+// The boarding row is kept — only its status flips — so it stays in the
+// commuter's Trip History as Cancelled. It's also closed out (alightedAt set)
+// the same way a completed ride is, which is what makes every existing "who is
+// currently on board" query (admin Passenger Monitoring, the driver's
+// end-of-trip cascade, /active-trip) stop counting them without needing to
+// know about cancellations at all. Never touches the driver's Trip itself:
+// one passenger cancelling must not end the jeepney's shift.
+const cancelBoardingSchema = z.object({
+  // Which ride to cancel. Optional — a commuter can only be on one jeepney at
+  // a time, so omitting it cancels whichever boarding is currently open.
+  boardingId: z.string().trim().min(1).optional(),
+});
+
+router.post('/board/cancel', requireAuth('commuter'), async (req, res, next) => {
+  try {
+    const body = cancelBoardingSchema.parse(req.body ?? {});
+
+    const boarding = await prisma.tripBoarding.findFirst({
+      where: {
+        commuterId: req.auth!.sub,
+        ...(body.boardingId ? { id: body.boardingId } : {}),
+      },
+      orderBy: { boardedAt: 'desc' },
+    });
+    if (!boarding) {
+      res.status(404).json({ error: "We couldn't find that ride." });
+      return;
+    }
+
+    // Already closed out (rode it, driver ended the trip, or already
+    // cancelled) — a repeat cancel tap is a harmless no-op, but a finished
+    // ride can't be turned into a cancelled one after the fact.
+    if (boarding.status === 'CANCELLED') {
+      res.json({ cancelled: true, boardingId: boarding.id, status: boarding.status });
+      return;
+    }
+    if (boarding.alightedAt !== null || boarding.status !== 'BOARDED') {
+      res.status(409).json({ error: 'This ride has already ended, so it can no longer be cancelled.' });
+      return;
+    }
+
+    // updateMany with the still-open guard, not update — if the driver ends
+    // the trip (closing this boarding as COMPLETED) between the read above
+    // and this write, that must win rather than being silently overwritten.
+    const now = new Date();
+    const result = await prisma.tripBoarding.updateMany({
+      where: { id: boarding.id, alightedAt: null, status: 'BOARDED' },
+      data: { status: 'CANCELLED', cancelledAt: now, alightedAt: now },
+    });
+    if (result.count === 0) {
+      res.status(409).json({ error: 'This ride has already ended, so it can no longer be cancelled.' });
+      return;
+    }
+
+    res.json({ cancelled: true, boardingId: boarding.id, status: 'CANCELLED' });
   } catch (err) {
     next(err);
   }
@@ -1540,6 +1608,14 @@ router.get('/trips', requireAuth('commuter'), async (req, res, next) => {
           route: trip.route,
           boardedAt: b.boardedAt,
           alightedAt: b.alightedAt,
+          // BOARDED | COMPLETED | CANCELLED — what Trip History labels each
+          // ride with. A cancelled ride is kept, not hidden (see POST
+          // /board/cancel).
+          status: b.status,
+          cancelledAt: b.cancelledAt,
+          // Whether Cancel still makes sense for this ride: only while the
+          // commuter is genuinely still on board a trip that's still running.
+          canCancel: b.status === 'BOARDED' && b.alightedAt === null && trip.status === 'ACTIVE',
           // Null on boardings from before this column existed (see
           // TripBoarding's doc comment) — the client falls back to
           // whatever it has cached locally in that case.
@@ -1585,7 +1661,9 @@ router.post('/trips/:tripId/rating', requireAuth('commuter'), async (req, res, n
     // TripBoarding's doc comment) — any one of them is proof enough that
     // this commuter actually rode with this driver on this trip.
     const boarding = await prisma.tripBoarding.findFirst({
-      where: { tripId, commuterId: req.auth!.sub },
+      // A cancelled boarding means they never actually rode — not proof
+      // enough to rate the driver.
+      where: { tripId, commuterId: req.auth!.sub, status: { not: 'CANCELLED' } },
     });
     if (!boarding) {
       res.status(404).json({ error: "You didn't board this trip." });

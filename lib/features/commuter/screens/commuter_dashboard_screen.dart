@@ -6,6 +6,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/map_config.dart';
+import '../../../core/utils/live_location.dart';
 import '../../../core/utils/location_settings.dart';
 import 'jeepney_booking_flow_screen.dart';
 import 'commuter_menu_drawer.dart';
@@ -37,17 +38,19 @@ class _CommuterDashboardScreenState extends State<CommuterDashboardScreen> {
   DateTime? _dateOfBirth = UserSession.instance.dateOfBirth;
   String? _photoUrl = UserSession.instance.photoUrl;
 
-  // Fallback used only if GPS is unavailable/denied — San Juan City, Metro
-  // Manila. The real value is populated by _resolveCurrentLocation() below.
+  // Where the map *camera* points until a real GPS fix arrives (San Juan
+  // City, Metro Manila) — only ever a place to look. It is never drawn as the
+  // commuter's position: _currentLocation below only ever holds a real fix.
   static const LatLng _fallbackLocation = LatLng(14.6019, 121.0355);
-
-  // A fix worse than this (in meters) is treated as "still warming up"
-  // rather than accepted outright — see _resolveCurrentLocation.
-  static const double _acceptableAccuracyMeters = 100;
 
   final MapController _mapController = MapController();
 
+  /// The commuter's real, current position — updated continuously by
+  /// [_positionSubscription], so the marker follows them as they move. Null
+  /// until the first real fix (never a stand-in coordinate).
   LatLng? _currentLocation;
+  double? _accuracyMeters;
+  StreamSubscription<Position>? _positionSubscription;
   bool _locatingInProgress = true;
   String? _locationError;
   bool _locationErrorIsServiceDisabled = false;
@@ -97,6 +100,7 @@ class _CommuterDashboardScreenState extends State<CommuterDashboardScreen> {
             ? null
             : ResumedTrip(
                 tripId: raw['tripId'] as String,
+                boardingId: raw['boardingId'] as String?,
                 route: raw['route'] as String? ?? '—',
                 driverName: raw['driverName'] as String,
                 plateNumber: raw['plateNumber'] as String,
@@ -162,47 +166,29 @@ class _CommuterDashboardScreenState extends State<CommuterDashboardScreen> {
         );
       }
 
-      // 3. Get the actual GPS fix. A fresh install's very first fix is the
-      // most likely to time out (GPS radio hasn't warmed up yet) — one
-      // retry here is the difference between "first open lands on the
-      // fallback location" and just taking a couple seconds longer.
-      //
-      // The fused provider can also *succeed* immediately with a coarse
-      // network/cell-tower fix — easily off by kilometers — before GPS has
-      // had time to lock in, which is what actually makes the map look
-      // like it opened to someone else's location rather than a timeout
-      // or error. So a fix that comes back worse than
-      // [_acceptableAccuracyMeters] still gets accepted as a last resort,
-      // but only after retrying for a tighter one first.
-      Position? position;
-      for (var attempt = 0; attempt < 3; attempt++) {
-        try {
-          final candidate = await Geolocator.getCurrentPosition(
-            locationSettings: LocationSettings(
-              accuracy: LocationAccuracy.high,
-              timeLimit: Duration(seconds: 12 + attempt * 4),
-            ),
-          );
-          position = candidate;
-          if (candidate.accuracy <= _acceptableAccuracyMeters || attempt == 2) break;
-          await Future.delayed(const Duration(seconds: 1));
-        } catch (_) {
-          if (attempt == 2) rethrow;
-          await Future.delayed(const Duration(seconds: 1));
-        }
-      }
+      // 3. Keep the marker on the commuter as they move: a live stream, not
+      // a one-shot read. Started before the first-fix attempt below so an
+      // update from it can clear a slow/failed first attempt on its own.
+      _startLiveTracking();
+
+      // 4. A quick precise first fix, so the map doesn't wait for the stream
+      // to warm up. Retries for a tighter, fresh reading and drops cached
+      // ones (see resolveCurrentPosition) — a cached or coarse fix is
+      // exactly what makes the marker sit somewhere the commuter isn't.
+      final position = await resolveCurrentPosition();
+      if (position == null) throw Exception('No fresh GPS fix yet.');
 
       if (!mounted) return;
-      final resolved = LatLng(position!.latitude, position.longitude);
+      final resolved = LatLng(position.latitude, position.longitude);
       setState(() {
         _currentLocation = resolved;
+        _accuracyMeters = position.accuracy;
         _locatingInProgress = false;
       });
       _mapController.move(resolved, 16);
     } on _LocationFailure catch (failure) {
       if (!mounted) return;
       setState(() {
-        _currentLocation ??= _fallbackLocation;
         _locatingInProgress = false;
         _locationError = failure.message;
         _locationErrorIsServiceDisabled = failure.isServiceDisabled;
@@ -216,7 +202,6 @@ class _CommuterDashboardScreenState extends State<CommuterDashboardScreen> {
     } catch (_) {
       if (!mounted) return;
       setState(() {
-        _currentLocation ??= _fallbackLocation;
         _locatingInProgress = false;
         _locationError = 'Could not get your current location.';
         _locationErrorIsServiceDisabled = false;
@@ -228,6 +213,47 @@ class _CommuterDashboardScreenState extends State<CommuterDashboardScreen> {
         );
       }
     }
+  }
+
+  /// Follows the commuter's real position for as long as this screen is
+  /// open. Every reading moves the existing marker (there's only one) and
+  /// clears any earlier "couldn't get your location" error — a fix arriving
+  /// is proof location is working now. The camera is left alone after the
+  /// first fix so a commuter who has panned away isn't yanked back; the
+  /// recenter button brings the view back to them.
+  void _startLiveTracking() {
+    if (_positionSubscription != null) return;
+    _positionSubscription = livePositionStream(distanceFilterMeters: 3).listen(
+      (position) {
+        if (!mounted) return;
+        final point = LatLng(position.latitude, position.longitude);
+        final isFirstFix = _currentLocation == null;
+        setState(() {
+          _currentLocation = point;
+          _accuracyMeters = position.accuracy;
+          _locatingInProgress = false;
+          _locationError = null;
+        });
+        if (isFirstFix) {
+          try {
+            _mapController.move(point, 16);
+          } catch (_) {
+            // Map not laid out yet — it is built around this point anyway.
+          }
+        }
+      },
+      onError: (_) {
+        // The stream failed mid-session (e.g. location services were
+        // switched off) — say so instead of freezing the marker silently.
+        if (!mounted) return;
+        setState(() {
+          _locationError = 'Lost your location. Turn location services back on.';
+          _locationErrorIsServiceDisabled = true;
+          _locationErrorCanRetryPrompt = false;
+        });
+      },
+      cancelOnError: false,
+    );
   }
 
   Future<void> _handleLogout(BuildContext context) async {
@@ -322,6 +348,9 @@ class _CommuterDashboardScreenState extends State<CommuterDashboardScreen> {
   @override
   Widget build(BuildContext context) {
     final mapCenter = _currentLocation ?? _fallbackLocation;
+    final hasPreciseFix = _currentLocation != null &&
+        _locationError == null &&
+        (_accuracyMeters ?? double.infinity) <= kPreciseFixMeters;
     // Once there's a real error (permission denied, service off, etc.),
     // don't keep the map showing _fallbackLocation full-screen as if it
     // were real — that's what actually reads as "the app shows a fake
@@ -357,8 +386,9 @@ class _CommuterDashboardScreenState extends State<CommuterDashboardScreen> {
             Positioned.fill(
               child: _LiveMap(
                 mapController: _mapController,
-                currentLocation: mapCenter,
-                hasRealFix: _currentLocation != null && _locationError == null,
+                initialCenter: mapCenter,
+                currentLocation: _currentLocation,
+                hasRealFix: hasPreciseFix,
                 onRecenter: _recenterMap,
               ),
             ),
@@ -482,6 +512,7 @@ class _CommuterDashboardScreenState extends State<CommuterDashboardScreen> {
 
   @override
   void dispose() {
+    _positionSubscription?.cancel();
     _notificationPollTimer?.cancel();
     _mapController.dispose();
     super.dispose();
@@ -788,12 +819,23 @@ class _RoundIconButton extends StatelessWidget {
 /// _startFindingJeepneys.
 class _LiveMap extends StatelessWidget {
   final MapController mapController;
-  final LatLng currentLocation;
+
+  /// Where the camera starts — the real position if already known, else a
+  /// neutral default. Not the marker.
+  final LatLng initialCenter;
+
+  /// The commuter's real position; null until the first fix, in which case
+  /// no marker is drawn (rather than one at a made-up place).
+  final LatLng? currentLocation;
+
+  /// Whether [currentLocation] is a precise GPS lock (blue) or still a rough
+  /// early reading (grey).
   final bool hasRealFix;
   final VoidCallback onRecenter;
 
   const _LiveMap({
     required this.mapController,
+    required this.initialCenter,
     required this.currentLocation,
     required this.hasRealFix,
     required this.onRecenter,
@@ -806,7 +848,7 @@ class _LiveMap extends StatelessWidget {
         FlutterMap(
           mapController: mapController,
           options: MapOptions(
-            initialCenter: currentLocation,
+            initialCenter: currentLocation ?? initialCenter,
             initialZoom: 15,
             minZoom: 3,
             maxZoom: 19,
@@ -827,9 +869,12 @@ class _LiveMap extends StatelessWidget {
             ),
             MarkerLayer(
               markers: [
-                // Current location — greyed out until we have a real GPS fix.
+                // Current location — one marker, moved in place as new
+                // readings arrive; greyed out until it's a precise GPS lock,
+                // and omitted entirely until there's any real fix at all.
+                if (currentLocation != null)
                 Marker(
-                  point: currentLocation,
+                  point: currentLocation!,
                   width: 30,
                   height: 30,
                   child: Container(
