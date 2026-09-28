@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../utils/manila_date_range.dart';
 import 'api_client.dart';
 import 'driver_session.dart';
 
@@ -82,6 +83,23 @@ class DriverOperationsLog {
   static final Map<String, DriverOperationsEntry> _byDateKey = {};
   static bool _loaded = false;
 
+  /// Whether the most recent [syncFromBackend] failed (offline, server
+  /// error). Lets a screen tell "nothing was logged that day" apart from
+  /// "couldn't fetch it" instead of showing a made-up zero for the latter.
+  static bool lastSyncFailed = false;
+
+  /// Whether [syncFromBackend] has completed at least once this session.
+  static bool hasSyncedOnce = false;
+
+  /// Today's calendar date in Asia/Manila (as a plain local-typed date), no
+  /// matter what timezone the phone is set to. Days are filed on the backend
+  /// under the Manila calendar day, so the analytics screens must count
+  /// "today" the same way or a late-night entry lands on the wrong bar.
+  static DateTime manilaToday() {
+    final manila = toManilaWallClock(DateTime.now());
+    return DateTime(manila.year, manila.month, manila.day);
+  }
+
   static String _keyFor(DateTime d) => '${d.year}-${d.month}-${d.day}';
 
   /// Loads whatever was previously persisted, once. Safe to call
@@ -147,6 +165,7 @@ class DriverOperationsLog {
   static Future<void> syncFromBackend() async {
     final token = DriverSession.instance.authToken;
     if (token == null) return;
+    lastSyncFailed = false;
     // Capped to match the backend's own max (see dailyLogQuerySchema in
     // driver.ts) — a higher value here fails validation and, since this
     // whole call is wrapped in a best-effort try/catch, does so silently.
@@ -174,12 +193,15 @@ class DriverOperationsLog {
       _byDateKey.removeWhere((key, entry) => !seenKeys.contains(key) && entry.date.isAfter(windowStart));
 
       await _persist();
+      hasSyncedOnce = true;
     } catch (_) {
-      // Keep whatever's cached locally.
+      // Keep whatever's cached locally — but remember the fetch failed, so
+      // a day missing from the cache isn't reported as genuinely empty.
+      lastSyncFailed = true;
     }
   }
 
-  static DriverOperationsEntry? get todayEntry => _byDateKey[_keyFor(DateTime.now())];
+  static DriverOperationsEntry? get todayEntry => _byDateKey[_keyFor(manilaToday())];
 
   static DriverOperationsEntry? forDate(DateTime date) => _byDateKey[_keyFor(date)];
 
