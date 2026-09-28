@@ -122,7 +122,9 @@ One ride segment: a commuter's board→alight on one Trip. Table name: `TripBoar
 | `tripId` | String | FK* → Trip.id, NOT NULL | |
 | `commuterId` | String | FK* → Commuter.id, NOT NULL | U (partial, raw SQL) with `tripId` where `alightedAt IS NULL` — at most one open ride per commuter per trip |
 | `boardedAt` | DateTime | NOT NULL, default: now | |
-| `alightedAt` | DateTime | N | Null = still riding |
+| `alightedAt` | DateTime | N | Null = still riding. Set for a completed *and* a cancelled ride (see `status`) |
+| `status` | Enum `BoardingStatus` | NOT NULL, default: `BOARDED` | `BOARDED` (on board now), `COMPLETED` (rode it), `CANCELLED` (commuter cancelled after boarding — kept for history, not counted as a passenger or a trip) |
+| `cancelledAt` | DateTime | N | Set only when `status` = `CANCELLED` |
 | `riders` | Int | N | Party size at boarding |
 
 ## DemandSignal

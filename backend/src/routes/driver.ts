@@ -10,7 +10,7 @@ import { generateDriverId } from '../utils/driverId';
 import { generateQrToken } from '../utils/qrToken';
 import { signAuthToken } from '../utils/jwt';
 import { issueOtp, verifyOtp } from '../utils/otp';
-import { formatDateOnly } from '../utils/date';
+import { formatDateOnly, manilaDayKey, manilaMidnight } from '../utils/date';
 import { requireAuth } from '../middleware/auth';
 import { uploadPhoto, uploadLicensePhotos, deleteUploadedPhoto, uploadBufferToCloudinary } from '../middleware/upload';
 import { notifyDriver, notifyAdmin, notifyCommuter } from '../utils/notify';
@@ -584,7 +584,22 @@ router.patch('/me/password', requireAuth('driver'), async (req, res, next) => {
 // something real instead of only existing on the driver's own device.
 // ---------------------------------------------------------------------------
 
-const startTripSchema = z.object({ route: z.string().trim().min(1).nullable().optional() });
+const startTripSchema = z
+  .object({
+    route: z.string().trim().min(1).nullable().optional(),
+    // The driver's position at the moment they tap Start Trip. Seeds the new
+    // trip's location so the jeepney is on the commuters' map from the very
+    // first second — otherwise a trip has no position at all until the first
+    // GPS *movement* update arrives, and a jeepney waiting at the terminal
+    // (the usual moment a trip is started) would stay invisible until it
+    // moved. Both or neither.
+    lat: z.number().min(-90).max(90).optional(),
+    lng: z.number().min(-180).max(180).optional(),
+  })
+  .refine((body) => (body.lat === undefined) === (body.lng === undefined), {
+    message: 'lat and lng must be sent together.',
+    path: ['lat'],
+  });
 
 router.post('/trips/start', requireAuth('driver'), async (req, res, next) => {
   try {
@@ -603,11 +618,23 @@ router.post('/trips/start', requireAuth('driver'), async (req, res, next) => {
       return;
     }
 
+    const hasLocation = body.lat !== undefined && body.lng !== undefined;
+
     const existingActive = await prisma.trip.findFirst({
       where: { driverId: req.auth!.sub, status: 'ACTIVE' },
     });
     if (existingActive) {
-      res.json({ trip: toPublicTrip(existingActive) });
+      // Re-tapping Start Trip (or the app restarting mid-trip and resuming
+      // this same trip) also counts as a fresh location fix — otherwise a
+      // trip whose last ping went stale would stay hidden from commuters
+      // until the next movement update.
+      const resumed = hasLocation
+        ? await prisma.trip.update({
+            where: { id: existingActive.id },
+            data: { currentLat: body.lat, currentLng: body.lng, locationUpdatedAt: new Date() },
+          })
+        : existingActive;
+      res.json({ trip: toPublicTrip(resumed) });
       return;
     }
 
@@ -616,7 +643,11 @@ router.post('/trips/start', requireAuth('driver'), async (req, res, next) => {
     // just be an echo. "Trip Completed" (below, in /trips/:id/end) stays,
     // since it doubles as a record that the trip was actually recorded.
     const trip = await prisma.trip.create({
-      data: { driverId: req.auth!.sub, route: body.route ?? null },
+      data: {
+        driverId: req.auth!.sub,
+        route: body.route ?? null,
+        ...(hasLocation ? { currentLat: body.lat, currentLng: body.lng, locationUpdatedAt: new Date() } : {}),
+      },
     });
 
     res.status(201).json({ trip: toPublicTrip(trip) });
@@ -704,7 +735,7 @@ router.post('/trips/:id/end', requireAuth('driver'), async (req, res, next) => {
     if (openBoardings.length > 0) {
       await prisma.tripBoarding.updateMany({
         where: { tripId: id, alightedAt: null },
-        data: { alightedAt: endedAt },
+        data: { alightedAt: endedAt, status: 'COMPLETED' },
       });
       await Promise.all(
         openBoardings.map((b) =>
@@ -1051,19 +1082,20 @@ router.get('/route-to-passenger', requireAuth('driver'), async (req, res, next) 
 // endpoints let it sync instead of being the sole source of truth.
 // ---------------------------------------------------------------------------
 
-// Local getters deliberately, not UTC — this server is assumed to run in
-// PH time (see this file's other "today" comments), so the local
-// calendar day IS the PH calendar day. Built via Date.UTC (not
-// `new Date(y, m, d)`) so this round-trips losslessly through
-// DriverDailyLog.date, a `@db.Date` column: Prisma extracts a Date
+// "Today" is the Asia/Manila calendar day — this app's audience and every
+// driver's own idea of "today" — regardless of what timezone the server
+// process happens to run in (a UTC host would otherwise roll "today" over at
+// 8 AM Manila time, filing a driver's morning entries under yesterday).
+// Returned as UTC midnight of that calendar day so it round-trips losslessly
+// through DriverDailyLog.date, a `@db.Date` column: Prisma extracts a Date
 // object's UTC calendar components when writing one, and a plain local-
 // midnight Date is one UTC day *earlier* than intended for any positive
 // UTC offset (PH is UTC+8) — the exact class of bug `dateOnly` in
 // utils/date.ts already exists to avoid for dateOfBirth. Confirmed live:
 // this used to store "today's" log under yesterday's date every time.
 function todayDateOnly(): Date {
-  const now = new Date();
-  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  const [year, month, day] = manilaDayKey(new Date()).split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day));
 }
 
 function toPublicDailyLog(log: {
@@ -1094,9 +1126,9 @@ const dailyLogSchema = z.object({
   otherExpenses: z.number().min(0).default(0),
 });
 
-// Always writes to *today's* row (server-side "today" — this machine runs
-// in PH time, matching the app's audience) — a driver can revise it as
-// many times as they like before the day is over, never picks a date.
+// Always writes to *today's* row (the Asia/Manila calendar day — see
+// todayDateOnly) — a driver can revise it as many times as they like before
+// the day is over, never picks a date.
 router.put('/daily-log', requireAuth('driver'), async (req, res, next) => {
   try {
     const body = dailyLogSchema.parse(req.body);
@@ -1125,13 +1157,11 @@ const dailyLogQuerySchema = z.object({
 router.get('/daily-log', requireAuth('driver'), async (req, res, next) => {
   try {
     const query = dailyLogQuerySchema.parse(req.query);
-    // UTC-constructed from local calendar components, same reasoning as
+    // UTC-constructed from the Manila calendar day, same reasoning as
     // todayDateOnly() above — filters a `@db.Date` column, so a plain
     // local-midnight Date would cut the window off one day too early.
-    const localToday = new Date();
-    const since = new Date(
-      Date.UTC(localToday.getFullYear(), localToday.getMonth(), localToday.getDate() - query.days),
-    );
+    const since = todayDateOnly();
+    since.setUTCDate(since.getUTCDate() - query.days);
 
     const logs = await prisma.driverDailyLog.findMany({
       where: { driverId: req.auth!.sub, date: { gte: since } },
@@ -1146,19 +1176,36 @@ router.get('/daily-log', requireAuth('driver'), async (req, res, next) => {
 
 router.get('/today-stats', requireAuth('driver'), async (req, res, next) => {
   try {
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
+    // Manila midnight, so the trip count and the daily log below agree on
+    // what "today" means (see todayDateOnly).
+    const today = todayDateOnly();
+    const startOfToday = manilaMidnight(formatDateOnly(today));
 
     const [tripsToday, todayLog] = await Promise.all([
       prisma.trip.count({ where: { driverId: req.auth!.sub, startedAt: { gte: startOfToday } } }),
       prisma.driverDailyLog.findUnique({
-        where: { driverId_date: { driverId: req.auth!.sub, date: todayDateOnly() } },
+        where: { driverId_date: { driverId: req.auth!.sub, date: today } },
       }),
     ]);
 
+    // Net income = what the driver took in minus what they logged spending
+    // (fuel + other expenses) — the same formula the admin Operations Report
+    // uses (see GET /admin/operations-report), so both dashboards agree. No
+    // expense is ever assumed: an expense the driver hasn't logged is 0, not
+    // an estimate. No log at all yet today means there's nothing to net, so
+    // it stays null rather than reading as a real ₱0.
+    const earnings = todayLog?.earnings ?? null;
+    const fuelExpense = todayLog?.fuelExpense ?? 0;
+    const otherExpenses = todayLog?.otherExpenses ?? 0;
+
     res.json({
       tripsToday,
-      earningsToday: todayLog?.earnings ?? null,
+      // Gross — kept for anything still reading it; the dashboard's
+      // "Earnings Today" card now shows netIncomeToday instead.
+      earningsToday: earnings,
+      fuelExpenseToday: todayLog ? fuelExpense : null,
+      otherExpensesToday: todayLog ? otherExpenses : null,
+      netIncomeToday: earnings === null ? null : earnings - fuelExpense - otherExpenses,
     });
   } catch (err) {
     next(err);

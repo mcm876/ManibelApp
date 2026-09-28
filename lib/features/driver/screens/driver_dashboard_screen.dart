@@ -7,6 +7,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/map_config.dart';
+import '../../../core/constants/route_path.dart';
 import '../../../core/services/api_client.dart';
 import '../../../core/services/driver_operations_log.dart';
 import '../../../core/services/driver_session.dart';
@@ -70,7 +71,11 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
   // than a locally-cached guess). Earnings falls back to
   // DriverOperationsLog's local store if this hasn't loaded yet/fails.
   int? _tripsTodayRemote;
-  double? _earningsTodayRemote;
+
+  // Net income for today — what was taken in minus the fuel and other
+  // expenses the driver logged (see GET /driver/today-stats). This is what
+  // the "Earnings Today" card shows, not gross revenue.
+  double? _netIncomeTodayRemote;
 
   // null | 'PENDING' | 'APPROVED' | 'REJECTED' — see
   // DriverSession.refreshLicenseStatus. Gates Start Trip (see
@@ -150,6 +155,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
     });
     _fetchTodayStats();
     _refreshLicenseStatus();
+    _restoreActiveTrip();
     _notificationPollTimer = Timer.periodic(const Duration(seconds: 20), (_) {
       DriverNotificationsScreen.fetchRemote().then((_) {
         if (mounted) setState(() {});
@@ -209,7 +215,72 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
     }
   }
 
-  /// Best-effort pull of today's trip count / earnings from the backend —
+  /// Picks a trip back up that is still running but isn't on screen — the app
+  /// was closed or killed mid-trip, or this dashboard was rebuilt. The trip
+  /// keeps running on the backend either way, and it only stays visible to
+  /// commuters while the driver's phone keeps reporting its position, so
+  /// re-attaching (and resuming those reports) is what keeps the jeepney on
+  /// the map. Best-effort; a failure just leaves the dashboard as it was.
+  Future<void> _restoreActiveTrip() async {
+    final tracker = DriverActiveTrip.instance;
+
+    // Tracking survived in this process (dashboard rebuilt) — just reflect it.
+    if (tracker.isActive) {
+      if (!mounted) return;
+      setState(
+        () => _activeTrip = _ActiveTrip(
+          route: tracker.route ?? '—',
+          plateNumber:
+              tracker.plateNumber ?? DriverSession.instance.plateNumber ?? '—',
+          startTime: tracker.startTime ?? DateTime.now(),
+        ),
+      );
+      _fetchDemandSignals();
+      return;
+    }
+
+    final token = DriverSession.instance.authToken;
+    if (token == null) return;
+    try {
+      final response = await ApiClient.get(
+        '/api/driver/trips/active',
+        token: token,
+      );
+      final trip = response['trip'] as Map<String, dynamic>?;
+      if (trip == null || !mounted) return;
+      // A trip was started from this screen while the request was in flight.
+      if (tracker.isActive || _activeTrip != null) return;
+
+      final route = trip['route'] as String?;
+      final plate = DriverSession.instance.plateNumber ?? '—';
+      final startedAt =
+          DateTime.tryParse(trip['startedAt'] as String? ?? '')?.toLocal() ??
+          DateTime.now();
+      final lat = (trip['currentLat'] as num?)?.toDouble();
+      final lng = (trip['currentLng'] as num?)?.toDouble();
+
+      await tracker.adoptExisting(
+        backendTripId: trip['id'] as String,
+        route: route,
+        plateNumber: plate,
+        startTime: startedAt,
+        lastKnownLocation: lat != null && lng != null ? LatLng(lat, lng) : null,
+      );
+      if (!mounted) return;
+      setState(
+        () => _activeTrip = _ActiveTrip(
+          route: route ?? '—',
+          plateNumber: plate,
+          startTime: startedAt,
+        ),
+      );
+      _fetchDemandSignals();
+    } catch (_) {
+      // Best-effort — no trip banner if this fails.
+    }
+  }
+
+  /// Best-effort pull of today's trip count / net income from the backend —
   /// authoritative across devices, unlike the local stores this falls
   /// back to. Never blocks the UI; a failure just leaves the fallback in
   /// place.
@@ -224,10 +295,10 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
       if (!mounted) return;
       setState(() {
         _tripsTodayRemote = response['tripsToday'] as int?;
-        final earnings = response['earningsToday'];
-        _earningsTodayRemote = earnings == null
+        final netIncome = response['netIncomeToday'];
+        _netIncomeTodayRemote = netIncome == null
             ? null
-            : (earnings as num).toDouble();
+            : (netIncome as num).toDouble();
       });
     } catch (_) {
       // Keep whatever's currently shown (local fallback).
@@ -572,6 +643,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
           plateNumber: trip.plateNumber,
           startTime: trip.startTime,
           initialLocation: _currentLocation ?? _fallbackLocation,
+          hasRealFix: _currentLocation != null && _locationError == null,
         ),
       ),
     );
@@ -592,6 +664,16 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
         if (mounted) setState(() {});
       });
     }
+  }
+
+  /// "₱1,250", or "-₱120" when today's expenses exceeded what came in.
+  String _formatPesoSigned(double amount) {
+    final rounded = amount.round();
+    final digits = rounded.abs().toString().replaceAllMapped(
+      RegExp(r'\B(?=(\d{3})+(?!\d))'),
+      (_) => ',',
+    );
+    return '${rounded < 0 ? '-' : ''}₱$digits';
   }
 
   String _timeOfDay(DateTime dt) {
@@ -936,15 +1018,9 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                           child: Stack(
                             children: [
                               IgnorePointer(
-                                child: _DriverLiveMap(
+                                child: _buildDriverMap(
                                   mapController: _previewMapController,
-                                  currentLocation:
-                                      _currentLocation ?? _fallbackLocation,
-                                  hasRealFix:
-                                      _currentLocation != null &&
-                                      _locationError == null,
                                   interactive: false,
-                                  waitingStops: _demandStops,
                                 ),
                               ),
                               Positioned(
@@ -1035,9 +1111,15 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                       icon: Icons.account_balance_wallet,
                       iconBg: AppColors.qrTileBg,
                       iconColor: AppColors.qrIconColor,
-                      title: 'Earnings',
-                      value:
-                          '₱${(_earningsTodayRemote ?? DriverOperationsLog.todayEntry?.totalEarnings ?? 0).toStringAsFixed(0)}',
+                      // Net, not gross: earnings minus the fuel/other
+                      // expenses logged today — so a day that cost more
+                      // than it brought in shows as a loss, not as revenue.
+                      title: 'Net Income',
+                      value: _formatPesoSigned(
+                        _netIncomeTodayRemote ??
+                            DriverOperationsLog.todayEntry?.netIncome ??
+                            0,
+                      ),
                       subtitle: 'Today',
                     ),
                   ),
@@ -1323,6 +1405,65 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
     );
   }
 
+  /// Where the small preview map was last centered — see _buildDriverMap.
+  LatLng? _lastPreviewCenter;
+
+  /// The dashboard's map (small preview and expanded modal). While a trip is
+  /// running it shows the trip's own live position — kept current by
+  /// DriverActiveTrip, not the one-time fix taken when this screen opened —
+  /// and the route being driven; otherwise the driver's own position.
+  Widget _buildDriverMap({
+    required MapController mapController,
+    required bool interactive,
+    VoidCallback? onRecenter,
+    ValueChanged<_WaitingStop>? onTapWaitingStop,
+  }) {
+    final tracker = DriverActiveTrip.instance;
+    return ValueListenableBuilder<int>(
+      valueListenable: tracker.updateNotifier,
+      builder: (context, _, _) {
+        final onTrip = _activeTrip != null && tracker.isActive;
+        final tripLocation = onTrip ? tracker.currentLocation : null;
+
+        // FlutterMap only honors initialCenter once, at first build — so the
+        // non-interactive preview (which nobody can pan) would stay on
+        // wherever it first opened (the fallback area, before the first
+        // fix) instead of showing the driver. Re-center it whenever the
+        // position it should show changes.
+        if (!interactive) {
+          final shown = tripLocation ?? _currentLocation;
+          if (shown != null && shown != _lastPreviewCenter) {
+            _lastPreviewCenter = shown;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              try {
+                mapController.move(shown, 15);
+              } catch (_) {
+                // Preview not laid out yet — it opens on this point anyway.
+              }
+            });
+          }
+        }
+
+        return _DriverLiveMap(
+          mapController: mapController,
+          currentLocation:
+              tripLocation ?? _currentLocation ?? _fallbackLocation,
+          hasRealFix: tripLocation != null
+              ? tracker.hasRealFix
+              : (_currentLocation != null && _locationError == null),
+          onRecenter: onRecenter,
+          interactive: interactive,
+          waitingStops: _demandStops,
+          onTapWaitingStop: onTapWaitingStop,
+          routePoints: _activeTrip == null
+              ? null
+              : RoutePath.forRoute(_activeTrip!.route),
+        );
+      },
+    );
+  }
+
   // Expanded, fully interactive live map modal.
   Widget _buildExpandedMapModal(BuildContext context) {
     return Container(
@@ -1388,12 +1529,10 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
           ),
           const Divider(height: 1),
           Expanded(
-            child: _DriverLiveMap(
+            child: _buildDriverMap(
               mapController: _mapController,
-              currentLocation: _currentLocation ?? _fallbackLocation,
-              hasRealFix: _currentLocation != null && _locationError == null,
+              interactive: true,
               onRecenter: _recenterMap,
-              waitingStops: _demandStops,
               onTapWaitingStop: _showPassengerInfo,
             ),
           ),
@@ -1564,6 +1703,10 @@ class _DriverLiveMap extends StatelessWidget {
   /// wired up only on the expanded, fully interactive map.
   final ValueChanged<_WaitingStop>? onTapWaitingStop;
 
+  /// The route this driver's active trip is running, origin to destination —
+  /// null when no trip is running.
+  final List<LatLng>? routePoints;
+
   const _DriverLiveMap({
     required this.mapController,
     required this.currentLocation,
@@ -1572,6 +1715,7 @@ class _DriverLiveMap extends StatelessWidget {
     this.interactive = true,
     this.waitingStops = const [],
     this.onTapWaitingStop,
+    this.routePoints,
   });
 
   @override
@@ -1601,6 +1745,18 @@ class _DriverLiveMap extends StatelessWidget {
                   TextSourceAttribution(
                     MapConfig.attribution,
                     onTap: () {},
+                  ),
+                ],
+              ),
+            if (routePoints != null)
+              PolylineLayer(
+                polylines: [
+                  Polyline(
+                    points: routePoints!,
+                    strokeWidth: 4,
+                    color: AppColors.primary,
+                    borderStrokeWidth: 2,
+                    borderColor: AppColors.onPrimary,
                   ),
                 ],
               ),

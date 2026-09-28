@@ -12,6 +12,24 @@ interface RideHistoryRow {
   route: string | null;
   boardedAt: string;
   alightedAt: string | null;
+  /** A cancelled ride (boarded, then the commuter backed out) is kept in
+   * this list — see POST /api/commuter/board/cancel. */
+  status: 'BOARDED' | 'COMPLETED' | 'CANCELLED';
+}
+
+const STATUS_BADGE: Record<RideHistoryRow['status'], { label: string; className: string }> = {
+  BOARDED: { label: 'On board', className: 'bg-blue-50 text-brand-blue' },
+  COMPLETED: { label: 'Completed', className: 'bg-status-good-bg text-status-good' },
+  CANCELLED: { label: 'Cancelled', className: 'bg-status-critical-bg text-status-critical' },
+};
+
+function RideStatusBadge({ status }: { status: RideHistoryRow['status'] }) {
+  const badge = STATUS_BADGE[status] ?? STATUS_BADGE.COMPLETED;
+  return (
+    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${badge.className}`}>
+      {badge.label}
+    </span>
+  );
 }
 
 interface RideHistoryResponse {
@@ -74,7 +92,10 @@ export function CommuterRideHistorySection({ commuterId, compact = false }: { co
               <li key={r.id} className="py-2 text-sm">
                 <div className="flex items-center justify-between">
                   <span className="font-medium text-gray-900">{r.driverName}</span>
-                  <span className="text-xs text-gray-500">{r.plateNumber}</span>
+                  <span className="flex items-center gap-2 text-xs text-gray-500">
+                    {r.plateNumber}
+                    <RideStatusBadge status={r.status} />
+                  </span>
                 </div>
                 <p className="mt-0.5 flex items-center gap-1.5 text-xs text-gray-500">
                   <RoutePill route={r.route} />
@@ -117,6 +138,7 @@ export function CommuterRideHistorySection({ commuterId, compact = false }: { co
                 <th className="px-5 py-3">Plate Number</th>
                 <th className="px-5 py-3">Route</th>
                 <th className="px-5 py-3">Boarded</th>
+                <th className="px-5 py-3">Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -128,6 +150,9 @@ export function CommuterRideHistorySection({ commuterId, compact = false }: { co
                     <RoutePill route={r.route} />
                   </td>
                   <td className="px-5 py-3 text-gray-600">{formatManilaDateTime(r.boardedAt)}</td>
+                  <td className="px-5 py-3">
+                    <RideStatusBadge status={r.status} />
+                  </td>
                 </tr>
               ))}
             </tbody>
