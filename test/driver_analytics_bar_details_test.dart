@@ -22,8 +22,8 @@ DriverOperationsEntry _entry(
 );
 
 /// Taps the middle of the bar for [index] out of [count] inside the chart.
-Future<void> _tapBar(WidgetTester tester, int index, int count) async {
-  final chart = find.byType(DayBarsChart);
+Future<void> _tapBar(WidgetTester tester, int index, int count, {Type chartType = DayBarsChart}) async {
+  final chart = find.byType(chartType);
   await tester.ensureVisible(chart);
   await tester.pumpAndSettle();
   final rect = tester.getRect(chart);
@@ -37,6 +37,7 @@ void main() {
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+    DriverOperationsLog.resetForTesting();
   });
 
   group('DayBarsChart', () {
@@ -243,43 +244,186 @@ void main() {
     });
   });
 
+  group('summarizeMonthWeeks', () {
+    final sept = DateTime(2026, 9, 1);
+
+    test('weeks are fixed 7-day blocks from the 1st, with a short last week', () {
+      final weeks = summarizeMonthWeeks(sept, const []);
+
+      expect(weeks.length, 5); // September has 30 days
+      expect([for (final w in weeks) '${w.start.day}-${w.end.day}'], ['1-7', '8-14', '15-21', '22-28', '29-30']);
+      expect(weeks.last.rangeLabel, 'September 29 – 30');
+      expect(weeks.first.rangeLabel, 'September 1 – 7');
+      expect(weeks.every((w) => !w.hasData), isTrue);
+    });
+
+    test('the number of weeks follows the real length of the month', () {
+      expect(summarizeMonthWeeks(DateTime(2026, 2, 1), const []).length, 4); // 28 days
+      final leap = summarizeMonthWeeks(DateTime(2028, 2, 1), const []); // 29 days
+      expect(leap.length, 5);
+      expect('${leap.last.start.day}-${leap.last.end.day}', '29-29');
+      expect(summarizeMonthWeeks(DateTime(2026, 10, 1), const []).length, 5); // 31 days
+    });
+
+    test('each entry lands in exactly the week its date belongs to', () {
+      final weeks = summarizeMonthWeeks(sept, [
+        _entry(DateTime(2026, 9, 1), earnings: 100, fuel: 10, other: 1), // week 1 (first day)
+        _entry(DateTime(2026, 9, 7), earnings: 200, fuel: 20, other: 2), // week 1 (last day)
+        _entry(DateTime(2026, 9, 8), earnings: 300, fuel: 30, other: 3), // week 2 (first day)
+        _entry(DateTime(2026, 9, 28), earnings: 400, fuel: 40, other: 4), // week 4 (last day)
+        _entry(DateTime(2026, 9, 29), earnings: 500, fuel: 50, other: 5), // week 5 (first day)
+        _entry(DateTime(2026, 9, 30), earnings: 600, fuel: 60, other: 6), // week 5 (last day)
+      ]);
+
+      expect(weeks[0].revenue, 300);
+      expect(weeks[0].fuel, 30);
+      expect(weeks[0].otherExpenses, 3);
+      expect(weeks[0].loggedDays, 2);
+      expect(weeks[1].revenue, 300);
+      expect(weeks[1].loggedDays, 1);
+      expect(weeks[2].hasData, isFalse); // nothing logged in week 3
+      expect(weeks[3].revenue, 400);
+      expect(weeks[4].revenue, 1100);
+      expect(weeks[4].fuel, 110);
+      expect(weeks[4].loggedDays, 2);
+    });
+
+    test('net income is revenue minus expenses, per week — never a share of the month', () {
+      final entries = [
+        _entry(DateTime(2026, 9, 3), earnings: 5000, fuel: 1500, other: 500),
+        _entry(DateTime(2026, 9, 20), earnings: 800, fuel: 900, other: 0),
+      ];
+      final weeks = summarizeMonthWeeks(sept, entries);
+
+      expect(weeks[0].net, 3000); // 5000 - (1500 + 500)
+      expect(weeks[0].expenses, 2000);
+      expect(weeks[2].net, -100); // a losing week is negative
+      // The weeks add back up to the month — nothing lost, nothing double counted.
+      final monthNet = entries.fold<double>(0, (s, e) => s + e.netIncome);
+      expect(weeks.fold<double>(0, (s, w) => s + w.net), monthNet);
+    });
+
+    test('records from the neighbouring months are never counted', () {
+      final weeks = summarizeMonthWeeks(sept, [
+        _entry(DateTime(2026, 8, 31), earnings: 9999, fuel: 1, other: 1), // last day of August
+        _entry(DateTime(2026, 10, 1), earnings: 8888, fuel: 1, other: 1), // first day of October
+        _entry(DateTime(2026, 9, 15), earnings: 100, fuel: 10, other: 0),
+      ]);
+
+      expect(weeks.fold<double>(0, (s, w) => s + w.revenue), 100);
+      expect(weeks.fold<int>(0, (s, w) => s + w.loggedDays), 1);
+      expect(weeks[0].hasData, isFalse, reason: 'Aug 31 must not leak into Week 1');
+      expect(weeks[4].hasData, isFalse, reason: 'Oct 1 must not leak into Week 5');
+    });
+
+    test('a logged week that nets exactly zero is distinct from a week with no records', () {
+      final weeks = summarizeMonthWeeks(sept, [
+        _entry(DateTime(2026, 9, 2), earnings: 500, fuel: 400, other: 100),
+      ]);
+
+      expect(weeks[0].hasData, isTrue);
+      expect(weeks[0].net, 0);
+      expect(weeks[1].hasData, isFalse);
+    });
+  });
+
+  group('WeekDetailsCard', () {
+    Widget host(Widget child) => MaterialApp(home: Scaffold(body: SingleChildScrollView(child: child)));
+
+    final week = summarizeMonthWeeks(DateTime(2026, 9, 1), [
+      _entry(DateTime(2026, 9, 9), earnings: 5000, fuel: 1500, other: 500),
+    ])[1];
+
+    testWidgets('shows the exact range, revenue, expenses, breakdown and net', (tester) async {
+      await tester.pumpWidget(host(
+        WeekDetailsCard(week: week, isLoading: false, loadFailed: false, onRetry: () {}, onClose: () {}),
+      ));
+
+      expect(find.text('Week 2'), findsOneWidget);
+      expect(find.text('September 8 – 14, 2026'), findsOneWidget);
+      expect(find.text('Total Revenue'), findsOneWidget);
+      expect(find.text('₱5,000.00'), findsOneWidget);
+      expect(find.text('Total Expenses'), findsOneWidget);
+      expect(find.text('₱2,000.00'), findsOneWidget);
+      expect(find.text('Fuel'), findsOneWidget);
+      expect(find.text('₱1,500.00'), findsOneWidget);
+      expect(find.text('Other Expenses'), findsOneWidget);
+      expect(find.text('₱500.00'), findsOneWidget);
+      expect(find.text('Net Income'), findsOneWidget);
+      expect(find.text('₱3,000.00'), findsOneWidget);
+      expect(find.text('1 of 7 days logged'), findsOneWidget);
+    });
+
+    testWidgets('empty week, loading and failed states never show a made-up ₱0', (tester) async {
+      final empty = summarizeMonthWeeks(DateTime(2026, 9, 1), const [])[2];
+
+      await tester.pumpWidget(host(
+        WeekDetailsCard(week: empty, isLoading: false, loadFailed: false, onRetry: () {}, onClose: () {}),
+      ));
+      expect(find.text('No revenue or expenses recorded for this week.'), findsOneWidget);
+      expect(find.textContaining('₱'), findsNothing);
+
+      await tester.pumpWidget(host(
+        WeekDetailsCard(week: empty, isLoading: true, loadFailed: false, onRetry: () {}, onClose: () {}),
+      ));
+      expect(find.text('Loading weekly details...'), findsOneWidget);
+
+      var retried = false;
+      await tester.pumpWidget(host(
+        WeekDetailsCard(week: empty, isLoading: false, loadFailed: true, onRetry: () => retried = true, onClose: () {}),
+      ));
+      expect(find.textContaining('Unable to load weekly details.'), findsOneWidget);
+      await tester.tap(find.text('Retry'));
+      expect(retried, isTrue);
+    });
+  });
+
   group('Monthly screen', () {
-    testWidgets('tapping a day of the month shows that date\'s expenses', (tester) async {
+    testWidgets('shows Net Income by Week (not by day) and each week bar opens that week', (tester) async {
       tester.view.physicalSize = const Size(800, 3200);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
 
       final today = DriverOperationsLog.manilaToday();
-      final daysInMonth = DateTime(today.year, today.month + 1, 0).day;
-      final dayOne = DateTime(today.year, today.month, 1);
-      final dayFifteen = DateTime(today.year, today.month, 15);
-      await DriverOperationsLog.save(_entry(dayOne, earnings: 700, fuel: 111, other: 22));
-      await DriverOperationsLog.save(_entry(dayFifteen, earnings: 1400, fuel: 333, other: 44));
+      final month = DateTime(today.year, today.month, 1);
+      // Week 1 and Week 2 get known values; Week 3 stays empty.
+      await DriverOperationsLog.save(_entry(DateTime(today.year, today.month, 3), earnings: 5000, fuel: 1500, other: 500));
+      await DriverOperationsLog.save(_entry(DateTime(today.year, today.month, 4), earnings: 1000, fuel: 200, other: 0));
+      await DriverOperationsLog.save(_entry(DateTime(today.year, today.month, 10), earnings: 2000, fuel: 700, other: 100));
 
       await tester.pumpWidget(const MaterialApp(home: DriverMonthlyAnalyticsScreen()));
       await tester.pumpAndSettle();
 
-      await _tapBar(tester, 14, daysInMonth); // the 15th
-      expect(find.text(formatLongDate(dayFifteen)), findsOneWidget);
-      expect(find.text('₱377.00'), findsOneWidget); // 333 + 44
-      expect(find.text('₱333.00'), findsOneWidget);
-
-      await _tapBar(tester, 0, daysInMonth); // the 1st
-      expect(find.text(formatLongDate(dayOne)), findsOneWidget);
-      expect(find.text('₱133.00'), findsOneWidget); // 111 + 22
-
-      // A day nothing was logged on (picked so it can't collide with the
-      // entries other tests in this file logged relative to today).
-      final emptyDay = [
-        for (var d = 2; d <= daysInMonth; d++) DateTime(today.year, today.month, d),
-      ].firstWhere((d) => DriverOperationsLog.forDate(d) == null);
-      await _tapBar(tester, emptyDay.day - 1, daysInMonth);
-      expect(find.text(formatLongDate(emptyDay)), findsOneWidget);
-      expect(find.text('No expenses recorded for this date.'), findsOneWidget);
-
-      // The existing weekly-bucket chart and totals are still there.
       expect(find.text('Net Income by Week'), findsOneWidget);
-      expect(find.text('Net Income by Day'), findsOneWidget);
+      expect(find.text('Net Income by Day'), findsNothing);
+      final weeks = summarizeMonthWeeks(month, DriverOperationsLog.allEntries);
+      expect(find.byType(WeekBarsChart), findsOneWidget);
+      for (final w in weeks) {
+        expect(find.text('Week ${w.number}'), findsWidgets);
+      }
+
+      final count = weeks.length;
+      await _tapBar(tester, 0, count, chartType: WeekBarsChart); // Week 1
+      expect(find.text('${weeks[0].rangeLabel}, ${month.year}'), findsOneWidget);
+      expect(find.text('₱6,000.00'), findsOneWidget); // revenue 5000 + 1000
+      expect(find.text('₱2,200.00'), findsOneWidget); // expenses 1500+500+200
+      expect(find.text('₱1,700.00'), findsOneWidget); // fuel 1500 + 200
+      expect(find.text('₱3,800.00'), findsOneWidget); // net 6000 - 2200
+
+      await _tapBar(tester, 1, count, chartType: WeekBarsChart); // Week 2 — everything changes
+      expect(find.text('${weeks[1].rangeLabel}, ${month.year}'), findsOneWidget);
+      expect(find.text('₱2,000.00'), findsOneWidget); // revenue
+      expect(find.text('₱800.00'), findsOneWidget); // expenses 700 + 100
+      expect(find.text('₱1,200.00'), findsOneWidget); // net
+      expect(find.text('₱3,800.00'), findsNothing, reason: 'Week 1 details are gone');
+
+      await _tapBar(tester, 2, count, chartType: WeekBarsChart); // Week 3 — nothing logged
+      expect(find.text('No revenue or expenses recorded for this week.'), findsOneWidget);
+
+      // Paging to another month drops the selection.
+      await tester.tap(find.byIcon(Icons.chevron_left_rounded).first);
+      await tester.pumpAndSettle();
+      expect(find.byType(WeekDetailsCard), findsNothing);
     });
   });
 

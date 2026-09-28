@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../utils/manila_date_range.dart';
@@ -199,6 +200,16 @@ class DriverOperationsLog {
       // a day missing from the cache isn't reported as genuinely empty.
       lastSyncFailed = true;
     }
+  }
+
+  /// Empties the in-memory cache and sync flags — tests only, so one test's
+  /// logged days can't leak into the next.
+  @visibleForTesting
+  static void resetForTesting() {
+    _byDateKey.clear();
+    _loaded = false;
+    lastSyncFailed = false;
+    hasSyncedOnce = false;
   }
 
   static DriverOperationsEntry? get todayEntry => _byDateKey[_keyFor(manilaToday())];

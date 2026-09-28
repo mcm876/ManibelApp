@@ -66,10 +66,87 @@ class DayBarData {
   const DayBarData({required this.date, required this.entry, this.label = ''});
 }
 
-/// Net-income-by-day bars. Every bar knows its own date, so a tap resolves to
-/// that exact date — nothing is inferred from an index or a total. Tapping
-/// selects (via [onSelect]); dragging a finger across the bars scrubs the
-/// selection, which keeps the thin bars of a 31-day month easy to hit.
+/// What one bar needs to be drawn, whatever period it stands for: its label,
+/// its net income (null = nothing logged, drawn as a flat grey stub), and an
+/// optional quick-info tooltip (hover on the web, long-press on a phone).
+class _BarSpec {
+  final String label;
+  final double? net;
+  final String? tooltip;
+
+  const _BarSpec({required this.label, required this.net, this.tooltip});
+}
+
+/// The tappable bar row shared by the day chart and the week chart. A tap
+/// resolves to a bar *index*, and each caller maps that index to the date /
+/// week the bar stands for — so nothing about a selection is inferred from
+/// anything but the bar that was hit. Dragging a finger across the bars
+/// scrubs the selection.
+class _BarsRow extends StatelessWidget {
+  final List<_BarSpec> bars;
+  final int? selectedIndex;
+  final ValueChanged<int> onSelectIndex;
+  final double barWidth;
+  final double height;
+
+  const _BarsRow({
+    required this.bars,
+    required this.selectedIndex,
+    required this.onSelectIndex,
+    required this.barWidth,
+    required this.height,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (bars.isEmpty) return SizedBox(height: height);
+
+    final maxMagnitude = bars.fold<double>(0, (max, b) {
+      final net = b.net?.abs() ?? 0;
+      return net > max ? net : max;
+    });
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final slotWidth = constraints.maxWidth / bars.length;
+
+        int indexAt(double dx) => (dx / slotWidth).floor().clamp(0, bars.length - 1);
+
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          // onTapUp (not onTapDown): only a real tap selects, so starting a
+          // scroll of the page over the chart doesn't.
+          onTapUp: (details) => onSelectIndex(indexAt(details.localPosition.dx)),
+          onHorizontalDragUpdate: (details) {
+            final index = indexAt(details.localPosition.dx);
+            if (index != selectedIndex) onSelectIndex(index);
+          },
+          child: SizedBox(
+            height: height,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                for (var i = 0; i < bars.length; i++)
+                  SizedBox(
+                    width: slotWidth,
+                    child: _BarSlot(
+                      spec: bars[i],
+                      maxMagnitude: maxMagnitude,
+                      barWidth: barWidth,
+                      selected: i == selectedIndex,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Net-income-by-day bars (Weekly Analytics). Every bar knows its own date,
+/// so a tap resolves to that exact date.
 class DayBarsChart extends StatelessWidget {
   final List<DayBarData> days;
   final DateTime? selectedDate;
@@ -88,63 +165,27 @@ class DayBarsChart extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (days.isEmpty) return SizedBox(height: height);
-
-    final maxMagnitude = days.fold<double>(0, (max, d) {
-      final net = d.entry?.netIncome.abs() ?? 0;
-      return net > max ? net : max;
-    });
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final slotWidth = constraints.maxWidth / days.length;
-
-        DateTime dateAt(double dx) {
-          final index = (dx / slotWidth).floor().clamp(0, days.length - 1);
-          return days[index].date;
-        }
-
-        return GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          // onTapUp (not onTapDown): only a real tap selects, so starting a
-          // scroll of the page over the chart doesn't.
-          onTapUp: (details) => onSelect(dateAt(details.localPosition.dx)),
-          onHorizontalDragUpdate: (details) {
-            final date = dateAt(details.localPosition.dx);
-            if (!isSameDay(date, selectedDate)) onSelect(date);
-          },
-          child: SizedBox(
-            height: height,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                for (final day in days)
-                  SizedBox(
-                    width: slotWidth,
-                    child: _DayBarSlot(
-                      data: day,
-                      maxMagnitude: maxMagnitude,
-                      barWidth: barWidth,
-                      selected: isSameDay(day.date, selectedDate),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        );
-      },
+    final selectedIndex = days.indexWhere((d) => isSameDay(d.date, selectedDate));
+    return _BarsRow(
+      bars: [
+        for (final d in days) _BarSpec(label: d.label, net: d.entry?.netIncome),
+      ],
+      selectedIndex: selectedIndex < 0 ? null : selectedIndex,
+      onSelectIndex: (i) => onSelect(days[i].date),
+      barWidth: barWidth,
+      height: height,
     );
   }
 }
 
-class _DayBarSlot extends StatelessWidget {
-  final DayBarData data;
+class _BarSlot extends StatelessWidget {
+  final _BarSpec spec;
   final double maxMagnitude;
   final double barWidth;
   final bool selected;
 
-  const _DayBarSlot({
-    required this.data,
+  const _BarSlot({
+    required this.spec,
     required this.maxMagnitude,
     required this.barWidth,
     required this.selected,
@@ -152,16 +193,15 @@ class _DayBarSlot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final entry = data.entry;
-    final net = entry?.netIncome ?? 0;
+    final net = spec.net ?? 0;
     final ratio = maxMagnitude > 0
         ? (net.abs() / maxMagnitude).clamp(0.05, 1.0)
         : 0.0;
-    final barHeight = entry == null ? 4.0 : (ratio * 100).clamp(4.0, 100.0);
+    final barHeight = spec.net == null ? 4.0 : (ratio * 100).clamp(4.0, 100.0);
     final barColor = net >= 0 ? AppColors.logoBlue : const Color(0xFFE23F3F);
 
-    return Container(
-      // The selected day's whole column is tinted, so it reads as selected
+    final slot = Container(
+      // The selected bar's whole column is tinted, so it reads as selected
       // even when its bar is only a few pixels tall.
       decoration: BoxDecoration(
         color: selected ? AppColors.primary.withValues(alpha: 0.28) : null,
@@ -175,7 +215,7 @@ class _DayBarSlot extends StatelessWidget {
             width: barWidth,
             height: barHeight,
             decoration: BoxDecoration(
-              color: entry == null ? const Color(0xFFE6E6E7) : barColor,
+              color: spec.net == null ? const Color(0xFFE6E6E7) : barColor,
               borderRadius: BorderRadius.circular(barWidth > 10 ? 6 : 3),
               border: selected
                   ? Border.all(color: AppColors.textPrimary, width: 1.5)
@@ -186,7 +226,7 @@ class _DayBarSlot extends StatelessWidget {
           SizedBox(
             height: 12,
             child: Text(
-              data.label,
+              spec.label,
               maxLines: 1,
               overflow: TextOverflow.visible,
               softWrap: false,
@@ -199,6 +239,289 @@ class _DayBarSlot extends StatelessWidget {
           ),
         ],
       ),
+    );
+
+    final tooltip = spec.tooltip;
+    return tooltip == null
+        ? slot
+        : Tooltip(message: tooltip, triggerMode: TooltipTriggerMode.longPress, child: slot);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// MONTHLY: NET INCOME BY WEEK
+// ---------------------------------------------------------------------------
+
+/// One week of the selected month, with everything its bar and its details
+/// card show — computed once, here, so the chart value and the details can
+/// never disagree.
+///
+/// Weeks follow the convention the Monthly screen has always used: fixed
+/// 7-day blocks counted from the 1st of the month (Week 1 = days 1–7, Week 2
+/// = 8–14, …), with a shorter final week when the month doesn't divide evenly.
+/// They are not Monday/Sunday-aligned calendar weeks, so a week never
+/// reaches into the previous or next month — records outside the selected
+/// month are simply never counted.
+class WeekSummary {
+  /// 1-based ("Week 1").
+  final int number;
+  final DateTime start;
+  final DateTime end;
+  final double revenue;
+  final double fuel;
+  final double otherExpenses;
+
+  /// How many days in this week have a logged entry (0 = nothing recorded —
+  /// distinct from a week that was logged and netted exactly ₱0).
+  final int loggedDays;
+
+  const WeekSummary({
+    required this.number,
+    required this.start,
+    required this.end,
+    required this.revenue,
+    required this.fuel,
+    required this.otherExpenses,
+    required this.loggedDays,
+  });
+
+  double get expenses => fuel + otherExpenses;
+
+  /// Revenue minus the logged expenses — the same formula as a day's net
+  /// income and the dashboard's Net Income card.
+  double get net => revenue - expenses;
+
+  bool get hasData => loggedDays > 0;
+
+  int get dayCount => end.day - start.day + 1;
+
+  String get rangeLabel => start.month == end.month
+      ? '${kMonthNames[start.month - 1]} ${start.day} – ${end.day}'
+      : '${kMonthNames[start.month - 1]} ${start.day} – ${kMonthNames[end.month - 1]} ${end.day}';
+}
+
+/// Buckets the entries of [month] into its weeks (see [WeekSummary]). Only
+/// entries dated inside the month are counted; the number of weeks follows
+/// the month's real length (Feb 2026 -> 4, a 30/31-day month -> 5).
+List<WeekSummary> summarizeMonthWeeks(DateTime month, Iterable<DriverOperationsEntry> entries) {
+  final daysInMonth = DateTime(month.year, month.month + 1, 0).day;
+  final weekCount = (daysInMonth + 6) ~/ 7;
+
+  return [
+    for (var w = 0; w < weekCount; w++)
+      () {
+        final firstDay = 1 + 7 * w;
+        final lastDay = (firstDay + 6) > daysInMonth ? daysInMonth : firstDay + 6;
+        var revenue = 0.0;
+        var fuel = 0.0;
+        var other = 0.0;
+        var logged = 0;
+        for (final e in entries) {
+          final d = e.date;
+          if (d.year != month.year || d.month != month.month) continue;
+          if (d.day < firstDay || d.day > lastDay) continue;
+          revenue += e.totalEarnings;
+          fuel += e.fuelExpense;
+          other += e.otherExpenses;
+          logged += 1;
+        }
+        return WeekSummary(
+          number: w + 1,
+          start: DateTime(month.year, month.month, firstDay),
+          end: DateTime(month.year, month.month, lastDay),
+          revenue: revenue,
+          fuel: fuel,
+          otherExpenses: other,
+          loggedDays: logged,
+        );
+      }(),
+  ];
+}
+
+/// Net-income-by-week bars (Monthly Analytics). Each bar is one
+/// [WeekSummary]; a tap or drag resolves to that week.
+class WeekBarsChart extends StatelessWidget {
+  final List<WeekSummary> weeks;
+  final int? selectedWeek; // WeekSummary.number
+  final ValueChanged<int> onSelect;
+  final double height;
+
+  const WeekBarsChart({
+    super.key,
+    required this.weeks,
+    required this.selectedWeek,
+    required this.onSelect,
+    this.height = 150,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final selectedIndex = weeks.indexWhere((w) => w.number == selectedWeek);
+    return _BarsRow(
+      bars: [
+        for (final w in weeks)
+          _BarSpec(
+            label: 'Week ${w.number}',
+            net: w.hasData ? w.net : null,
+            tooltip: 'Week ${w.number}\n${w.rangeLabel}\n'
+                '${w.hasData ? 'Net Income: ${formatPeso(w.net)}' : 'Nothing logged'}',
+          ),
+      ],
+      selectedIndex: selectedIndex < 0 ? null : selectedIndex,
+      onSelectIndex: (i) => onSelect(weeks[i].number),
+      barWidth: 26,
+      height: height,
+    );
+  }
+}
+
+/// The selected week's details: exact date range, total revenue, total
+/// expenses with the app's existing categories, and net income — all from
+/// the same [WeekSummary] the bar was drawn from.
+class WeekDetailsCard extends StatelessWidget {
+  final WeekSummary week;
+
+  /// The first sync hasn't finished — an empty week may just not have
+  /// arrived yet, so it isn't reported as empty.
+  final bool isLoading;
+
+  /// The last sync failed — an empty week may be a failed fetch rather than
+  /// a genuinely empty one, so it isn't reported as ₱0.
+  final bool loadFailed;
+
+  final VoidCallback onRetry;
+  final VoidCallback onClose;
+
+  const WeekDetailsCard({
+    super.key,
+    required this.week,
+    required this.isLoading,
+    required this.loadFailed,
+    required this.onRetry,
+    required this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.primary, width: 1.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Week ${week.number}',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w900,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${week.rangeLabel}, ${week.start.year}',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Colors.black54,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              InkWell(
+                onTap: onClose,
+                customBorder: const CircleBorder(),
+                child: const Padding(
+                  padding: EdgeInsets.all(4),
+                  child: Icon(Icons.close_rounded, size: 18, color: Colors.black45),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _body(),
+        ],
+      ),
+    );
+  }
+
+  Widget _body() {
+    if (!week.hasData) {
+      if (isLoading) {
+        return const Row(
+          children: [
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            SizedBox(width: 10),
+            Text(
+              'Loading weekly details...',
+              style: TextStyle(fontSize: 12, color: Colors.black54, fontWeight: FontWeight.w600),
+            ),
+          ],
+        );
+      }
+      if (loadFailed) {
+        return Row(
+          children: [
+            const Expanded(
+              child: Text(
+                'Unable to load weekly details.\nPlease try again.',
+                style: TextStyle(fontSize: 12, color: Color(0xFFB42318), fontWeight: FontWeight.w700),
+              ),
+            ),
+            TextButton(onPressed: onRetry, child: const Text('Retry')),
+          ],
+        );
+      }
+      return const Text(
+        'No revenue or expenses recorded for this week.',
+        style: TextStyle(fontSize: 12, color: Colors.black54, fontWeight: FontWeight.w600),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _DetailRow(label: 'Total Revenue', value: formatPeso(week.revenue)),
+        const SizedBox(height: 6),
+        _DetailRow(label: 'Total Expenses', value: formatPeso(week.expenses)),
+        const Divider(height: 22),
+        const Text(
+          'Expense Breakdown',
+          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 8),
+        _DetailRow(label: 'Fuel', value: formatPeso(week.fuel)),
+        const SizedBox(height: 6),
+        _DetailRow(label: 'Other Expenses', value: formatPeso(week.otherExpenses)),
+        const Divider(height: 22),
+        _DetailRow(
+          label: 'Net Income',
+          value: formatPeso(week.net),
+          emphasize: true,
+          valueColor: week.net < 0 ? const Color(0xFFE23F3F) : AppColors.logoBlue,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          '${week.loggedDays} of ${week.dayCount} days logged',
+          style: const TextStyle(fontSize: 10, color: Colors.black45, fontWeight: FontWeight.w600),
+        ),
+      ],
     );
   }
 }
