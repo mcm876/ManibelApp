@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/driver_operations_log.dart';
+import '../widgets/day_expense_chart.dart';
 
 /// Rolls up a chosen 7-day window of [DriverOperationsLog] entries into
 /// totals, averages, and a simple day-by-day net income chart. Defaults to
@@ -47,6 +48,14 @@ class _DriverWeeklyAnalyticsScreenState
   // Never allowed to go positive (into the future).
   int _weekOffset = 0;
 
+  /// The day whose bar was tapped — its expenses are shown below the chart.
+  /// Cleared whenever the driver pages to another week.
+  DateTime? _selectedDay;
+
+  /// False until the first sync from the backend has finished, so a tapped
+  /// day with no cached entry reads "Loading…" rather than "no expenses".
+  bool _initialSyncDone = false;
+
   /// Keeps this screen live while it's open — a day logged/edited/deleted
   /// (including directly in the database) should show up here without
   /// the driver having to leave and come back, same as every other
@@ -57,7 +66,7 @@ class _DriverWeeklyAnalyticsScreenState
   void initState() {
     super.initState();
     DriverOperationsLog.syncFromBackend().then((_) {
-      if (mounted) setState(() {});
+      if (mounted) setState(() => _initialSyncDone = true);
     });
     _pollTimer = Timer.periodic(const Duration(seconds: 20), (_) {
       DriverOperationsLog.syncFromBackend().then((_) {
@@ -72,22 +81,43 @@ class _DriverWeeklyAnalyticsScreenState
     super.dispose();
   }
 
+  // "Today" is the Asia/Manila calendar day (see
+  // DriverOperationsLog.manilaToday) — the same day the backend files a
+  // driver's log under — and every date here is built from calendar fields,
+  // never by subtracting 24-hour Durations, so no day can slip across a
+  // boundary.
   DateTime get _windowEnd {
-    final today = DateTime.now();
-    return DateTime(
-      today.year,
-      today.month,
-      today.day,
-    ).subtract(Duration(days: -7 * _weekOffset));
+    final today = DriverOperationsLog.manilaToday();
+    return DateTime(today.year, today.month, today.day + 7 * _weekOffset);
   }
 
-  DateTime get _windowStart => _windowEnd.subtract(const Duration(days: 6));
+  DateTime get _windowStart {
+    final end = _windowEnd;
+    return DateTime(end.year, end.month, end.day - 6);
+  }
 
-  void _goToPreviousWeek() => setState(() => _weekOffset -= 1);
+  void _goToPreviousWeek() => setState(() {
+    _weekOffset -= 1;
+    _selectedDay = null;
+  });
 
   void _goToNextWeek() {
     if (_weekOffset >= 0) return;
-    setState(() => _weekOffset += 1);
+    setState(() {
+      _weekOffset += 1;
+      _selectedDay = null;
+    });
+  }
+
+  void _selectDay(DateTime day) => setState(() => _selectedDay = day);
+
+  void _clearSelection() => setState(() => _selectedDay = null);
+
+  void _retrySync() {
+    setState(() => _initialSyncDone = false);
+    DriverOperationsLog.syncFromBackend().then((_) {
+      if (mounted) setState(() => _initialSyncDone = true);
+    });
   }
 
   String _formatShort(DateTime d) => '${_monthAbbrev[d.month - 1]} ${d.day}';
@@ -190,7 +220,7 @@ class _DriverWeeklyAnalyticsScreenState
     // matching a logged entry to each day where one exists.
     final days = List<DateTime>.generate(
       7,
-      (i) => windowEnd.subtract(Duration(days: 6 - i)),
+      (i) => DateTime(windowEnd.year, windowEnd.month, windowEnd.day - (6 - i)),
     );
     final entryByDay = <int, DriverOperationsEntry>{};
     for (final e in entries) {
@@ -201,10 +231,6 @@ class _DriverWeeklyAnalyticsScreenState
           ).millisecondsSinceEpoch] =
           e;
     }
-    final maxNet = entries.fold<double>(
-      0,
-      (max, e) => e.netIncome.abs() > max ? e.netIncome.abs() : max,
-    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -261,7 +287,12 @@ class _DriverWeeklyAnalyticsScreenState
           'Net Income by Day',
           style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 4),
+        const Text(
+          'Tap a day to see its expenses.',
+          style: TextStyle(fontSize: 10, color: Colors.black45, fontWeight: FontWeight.w500),
+        ),
+        const SizedBox(height: 10),
         Container(
           width: double.infinity,
           padding: const EdgeInsets.fromLTRB(12, 20, 12, 12),
@@ -270,28 +301,31 @@ class _DriverWeeklyAnalyticsScreenState
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: const Color(0xFFE1E4E8)),
           ),
-          child: SizedBox(
-            height: 150,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                for (final day in days)
-                  Expanded(
-                    child: _DayBar(
-                      label: _weekdayLabels[day.weekday - 1],
-                      entry:
-                          entryByDay[DateTime(
-                            day.year,
-                            day.month,
-                            day.day,
-                          ).millisecondsSinceEpoch],
-                      maxMagnitude: maxNet,
-                    ),
-                  ),
-              ],
-            ),
+          child: DayBarsChart(
+            days: [
+              for (final day in days)
+                DayBarData(
+                  date: day,
+                  label: _weekdayLabels[day.weekday - 1],
+                  entry: entryByDay[DateTime(day.year, day.month, day.day)
+                      .millisecondsSinceEpoch],
+                ),
+            ],
+            selectedDate: _selectedDay,
+            onSelect: _selectDay,
           ),
         ),
+        if (_selectedDay != null) ...[
+          const SizedBox(height: 12),
+          DayExpenseDetailsCard(
+            date: _selectedDay!,
+            entry: DriverOperationsLog.forDate(_selectedDay!),
+            isLoading: !_initialSyncDone,
+            loadFailed: DriverOperationsLog.lastSyncFailed,
+            onRetry: _retrySync,
+            onClose: _clearSelection,
+          ),
+        ],
         const SizedBox(height: 20),
         const Text(
           'Averages',
@@ -409,51 +443,6 @@ class _WeekNavButton extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _DayBar extends StatelessWidget {
-  final String label;
-  final DriverOperationsEntry? entry;
-  final double maxMagnitude;
-
-  const _DayBar({
-    required this.label,
-    required this.entry,
-    required this.maxMagnitude,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final net = entry?.netIncome ?? 0;
-    final ratio = maxMagnitude > 0
-        ? (net.abs() / maxMagnitude).clamp(0.05, 1.0)
-        : 0.0;
-    final barHeight = entry == null ? 4.0 : (ratio * 100).clamp(4.0, 100.0);
-    final barColor = net >= 0 ? AppColors.logoBlue : const Color(0xFFE23F3F);
-
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.end,
-      children: [
-        Container(
-          width: 18,
-          height: barHeight,
-          decoration: BoxDecoration(
-            color: entry == null ? const Color(0xFFE6E6E7) : barColor,
-            borderRadius: BorderRadius.circular(6),
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.w700,
-            color: Colors.black54,
-          ),
-        ),
-      ],
     );
   }
 }

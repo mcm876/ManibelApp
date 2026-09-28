@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/driver_operations_log.dart';
+import '../widgets/day_expense_chart.dart';
 
 /// Rolls up a chosen calendar month's [DriverOperationsLog] entries into
 /// totals, averages, a week-by-week net income chart, and a "best day"
@@ -38,6 +39,14 @@ class _DriverMonthlyAnalyticsScreenState
   // positive (into the future).
   int _monthOffset = 0;
 
+  /// The day whose bar was tapped — its expenses are shown below the daily
+  /// chart. Cleared whenever the driver pages to another month.
+  DateTime? _selectedDay;
+
+  /// False until the first sync from the backend has finished, so a tapped
+  /// day with no cached entry reads "Loading…" rather than "no expenses".
+  bool _initialSyncDone = false;
+
   /// Keeps this screen live while it's open — same reasoning as
   /// DriverWeeklyAnalyticsScreen's own poll timer.
   Timer? _pollTimer;
@@ -46,7 +55,7 @@ class _DriverMonthlyAnalyticsScreenState
   void initState() {
     super.initState();
     DriverOperationsLog.syncFromBackend().then((_) {
-      if (mounted) setState(() {});
+      if (mounted) setState(() => _initialSyncDone = true);
     });
     _pollTimer = Timer.periodic(const Duration(seconds: 20), (_) {
       DriverOperationsLog.syncFromBackend().then((_) {
@@ -61,8 +70,11 @@ class _DriverMonthlyAnalyticsScreenState
     super.dispose();
   }
 
+  // The current month is the Asia/Manila one (see
+  // DriverOperationsLog.manilaToday) — the calendar the backend files a
+  // driver's daily log under — not whatever timezone the phone is set to.
   DateTime get _selectedMonth {
-    final now = DateTime.now();
+    final now = DriverOperationsLog.manilaToday();
     return DateTime(now.year, now.month + _monthOffset, 1);
   }
 
@@ -71,11 +83,28 @@ class _DriverMonthlyAnalyticsScreenState
     return DateTime(month.year, month.month + 1, 0);
   }
 
-  void _goToPreviousMonth() => setState(() => _monthOffset -= 1);
+  void _goToPreviousMonth() => setState(() {
+    _monthOffset -= 1;
+    _selectedDay = null;
+  });
 
   void _goToNextMonth() {
     if (_monthOffset >= 0) return;
-    setState(() => _monthOffset += 1);
+    setState(() {
+      _monthOffset += 1;
+      _selectedDay = null;
+    });
+  }
+
+  void _selectDay(DateTime day) => setState(() => _selectedDay = day);
+
+  void _clearSelection() => setState(() => _selectedDay = null);
+
+  void _retrySync() {
+    setState(() => _initialSyncDone = false);
+    DriverOperationsLog.syncFromBackend().then((_) {
+      if (mounted) setState(() => _initialSyncDone = true);
+    });
   }
 
   @override
@@ -300,6 +329,45 @@ class _DriverMonthlyAnalyticsScreenState
         ),
         const SizedBox(height: 20),
         const Text(
+          'Net Income by Day',
+          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Tap a day to see its expenses.',
+          style: TextStyle(fontSize: 10, color: Colors.black45, fontWeight: FontWeight.w500),
+        ),
+        const SizedBox(height: 10),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(12, 20, 12, 12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFFE1E4E8)),
+          ),
+          child: DayBarsChart(
+            // One bar per calendar day of the selected month, each carrying
+            // its own date, so a tap resolves to that exact date.
+            days: _dailyBars(entries),
+            selectedDate: _selectedDay,
+            onSelect: _selectDay,
+            barWidth: 6,
+          ),
+        ),
+        if (_selectedDay != null) ...[
+          const SizedBox(height: 12),
+          DayExpenseDetailsCard(
+            date: _selectedDay!,
+            entry: DriverOperationsLog.forDate(_selectedDay!),
+            isLoading: !_initialSyncDone,
+            loadFailed: DriverOperationsLog.lastSyncFailed,
+            onRetry: _retrySync,
+            onClose: _clearSelection,
+          ),
+        ],
+        const SizedBox(height: 20),
+        const Text(
           'Averages',
           style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
         ),
@@ -330,6 +398,26 @@ class _DriverMonthlyAnalyticsScreenState
         ),
       ],
     );
+  }
+
+  /// One [DayBarData] per calendar day of the selected month (1st..last),
+  /// matched to that day's logged entry by exact date. Labels are sparse (the
+  /// 1st and every 5th) so 31 thin bars stay readable.
+  List<DayBarData> _dailyBars(List<DriverOperationsEntry> entries) {
+    final month = _selectedMonth;
+    final daysInMonth = _selectedMonthEnd.day;
+    final entryByDay = <int, DriverOperationsEntry>{
+      for (final e in entries)
+        DateTime(e.date.year, e.date.month, e.date.day).millisecondsSinceEpoch: e,
+    };
+    return [
+      for (var d = 1; d <= daysInMonth; d++)
+        DayBarData(
+          date: DateTime(month.year, month.month, d),
+          label: (d == 1 || d % 5 == 0) ? '$d' : '',
+          entry: entryByDay[DateTime(month.year, month.month, d).millisecondsSinceEpoch],
+        ),
+    ];
   }
 
   Widget _buildHeader(BuildContext context, DateTime month) {
