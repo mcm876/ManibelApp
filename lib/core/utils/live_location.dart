@@ -19,6 +19,10 @@ const double kPreciseFixMeters = 100;
 /// classic reason a marker sits at yesterday's/the previous stop's position.
 const Duration kMaxFixAge = Duration(seconds: 30);
 
+/// After a precise fix, readings worse than this are treated as glitches
+/// (network-location jumps) and ignored rather than moving the marker.
+const double kJumpRejectMeters = 50;
+
 /// Whether [position] is a genuinely current reading rather than a cached one.
 bool isFreshFix(Position position) {
   return DateTime.now().difference(position.timestamp) <= kMaxFixAge;
@@ -74,15 +78,20 @@ String locationAccessMessage(LocationAccess access) {
 /// Assumes [ensureLocationAccess] already succeeded.
 Future<Position?> resolveCurrentPosition() async {
   Position? best;
+  // Last reading that failed the freshness check. Only used if *nothing*
+  // passes it: a phone with a wrong clock makes every genuine fix look stale,
+  // and no position at all is worse than one that may be slightly old.
+  Position? staleFallback;
   for (var attempt = 0; attempt < 3; attempt++) {
     try {
       final candidate = await Geolocator.getCurrentPosition(
         locationSettings: LocationSettings(
-          accuracy: LocationAccuracy.best,
+          accuracy: LocationAccuracy.bestForNavigation,
           timeLimit: Duration(seconds: 12 + attempt * 4),
         ),
       );
       if (!isFreshFix(candidate)) {
+        staleFallback = candidate;
         await Future.delayed(const Duration(seconds: 1));
         continue;
       }
@@ -93,7 +102,7 @@ Future<Position?> resolveCurrentPosition() async {
       await Future.delayed(const Duration(seconds: 1));
     }
   }
-  return best;
+  return best ?? staleFallback;
 }
 
 /// A continuous stream of the device's position: best-available accuracy,
@@ -112,16 +121,39 @@ Stream<Position> livePositionStream({
   final LocationSettings settings;
   if (defaultTargetPlatform == TargetPlatform.android) {
     settings = AndroidSettings(
-      accuracy: LocationAccuracy.best,
+      accuracy: LocationAccuracy.bestForNavigation,
       distanceFilter: distanceFilterMeters,
-      intervalDuration: const Duration(seconds: 2),
+      intervalDuration: const Duration(seconds: 1),
       foregroundNotificationConfig: foregroundNotification,
     );
   } else {
     settings = LocationSettings(
-      accuracy: LocationAccuracy.best,
+      accuracy: LocationAccuracy.bestForNavigation,
       distanceFilter: distanceFilterMeters,
     );
   }
-  return Geolocator.getPositionStream(locationSettings: settings).where(isFreshFix);
+  return _dropOutOfOrder(Geolocator.getPositionStream(locationSettings: settings));
+}
+
+/// Drops readings that are older than one already delivered (an OS replaying a
+/// cached fix after a newer one). This deliberately does NOT compare the fix
+/// timestamp with the phone's clock: [isFreshFix] did, and on any phone whose
+/// clock is more than [kMaxFixAge] off GPS time (wrong date/time, manual time,
+/// emulator) it rejected *every* event â€” the stream never emitted, so the
+/// driver's marker never left its starting point no matter how far they walked.
+///
+/// Also, once a precise GPS lock has been seen, drops the coarse
+/// cell-tower/Wi-Fi readings Android sometimes interleaves — those are what
+/// make a marker jump hundreds of meters sideways and back.
+Stream<Position> _dropOutOfOrder(Stream<Position> source) async* {
+  DateTime? latest;
+  var hadPreciseFix = false;
+  await for (final position in source) {
+    final at = position.timestamp;
+    if (latest != null && at.isBefore(latest)) continue;
+    if (hadPreciseFix && position.accuracy > kJumpRejectMeters) continue;
+    latest = at;
+    if (isPreciseFix(position)) hadPreciseFix = true;
+    yield position;
+  }
 }

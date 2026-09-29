@@ -48,7 +48,7 @@ class DriverActiveTrip {
   /// commuter.ts). That is what made a started, still-active jeepney vanish
   /// from the booking map.
   Timer? _heartbeatTimer;
-  static const Duration _heartbeatInterval = Duration(seconds: 15);
+  static const Duration _heartbeatInterval = Duration(seconds: 10);
 
   String? route;
   String? plateNumber;
@@ -206,7 +206,7 @@ class DriverActiveTrip {
     // A movement ping just went out — no need to double up.
     final last = _lastLocationPingAt;
     if (last != null &&
-        DateTime.now().difference(last) < const Duration(seconds: 12)) {
+        DateTime.now().difference(last) < const Duration(seconds: 8)) {
       return;
     }
     await _sendLocationToBackend(here);
@@ -260,7 +260,7 @@ class DriverActiveTrip {
 
       _positionSubscription =
           livePositionStream(
-            distanceFilterMeters: 5,
+            distanceFilterMeters: 3,
             // Keeps position updates flowing while the driver's phone is
             // locked or another app is in front — without this Android stops
             // delivering them shortly after the app leaves the foreground,
@@ -304,7 +304,7 @@ class DriverActiveTrip {
 
   /// Reports the driver's current position to the backend so the admin
   /// live map and commuters' booking map reflect it — throttled to at most
-  /// once per 10 seconds (GPS updates fire far more often than that, and the
+  /// once per 4 seconds (GPS updates fire far more often than that, and the
   /// map doesn't need finer resolution than "where roughly is this jeepney
   /// now"). Standing still is covered separately by the heartbeat.
   Future<void> _pingLocationToBackend(Position position) async {
@@ -312,7 +312,7 @@ class DriverActiveTrip {
 
     final now = DateTime.now();
     if (_lastLocationPingAt != null &&
-        now.difference(_lastLocationPingAt!) < const Duration(seconds: 10)) {
+        now.difference(_lastLocationPingAt!) < const Duration(seconds: 4)) {
       return;
     }
     await _sendLocationToBackend(LatLng(position.latitude, position.longitude));
