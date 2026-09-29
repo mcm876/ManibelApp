@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "node --watch-path=src -r ts-node/register src/index.ts",
     "build": "tsc",
-    "start": "prisma migrate deploy && node dist/src/index.js",
+    "start": "node scripts/start.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
