@@ -9,6 +9,8 @@ import '../../../core/constants/map_config.dart';
 import '../../../core/constants/route_path.dart';
 import '../../../core/services/api_client.dart';
 import '../../../core/services/driver_session.dart';
+import '../widgets/starting_odometer_dialog.dart';
+import 'driver_trip_in_progress_screen.dart';
 
 /// The only two routes this fleet actually services.
 const List<String> kDriverRoutes = [
@@ -20,7 +22,15 @@ class DriverStartTripResult {
   final String route;
   final String plateNumber;
 
-  const DriverStartTripResult({required this.route, required this.plateNumber});
+  /// The odometer reading (km) the trip was started with — already saved on
+  /// the backend trip by the time this result is returned.
+  final double startingOdometer;
+
+  const DriverStartTripResult({
+    required this.route,
+    required this.plateNumber,
+    required this.startingOdometer,
+  });
 }
 
 /// Full-screen "Start Trip" flow: pick which of the two routes to
@@ -43,6 +53,7 @@ class DriverStartTripScreen extends StatefulWidget {
 
 class _DriverStartTripScreenState extends State<DriverStartTripScreen> {
   String? _selectedRoute;
+  bool _starting = false;
   final MapController _mapController = MapController();
 
   // Clustered demand-signal pings (see GET /api/driver/demand-signals and
@@ -98,15 +109,104 @@ class _DriverStartTripScreenState extends State<DriverStartTripScreen> {
     }
   }
 
-  void _confirm() {
-    if (_selectedRoute == null) {
+  /// Route picked -> ask for the odometer -> start the trip on the backend
+  /// (which saves the odometer in the same write) -> only then leave this
+  /// screen. Cancelling the odometer prompt, or any failure, keeps the driver
+  /// here with no trip started.
+  Future<void> _confirm() async {
+    if (_starting) return;
+    final route = _selectedRoute;
+    if (route == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please select a route to broadcast.')),
       );
       return;
     }
-    final plate = DriverSession.instance.plateNumber ?? '—';
-    Navigator.pop(context, DriverStartTripResult(route: _selectedRoute!, plateNumber: plate));
+
+    final odometer = await showStartingOdometerDialog(context);
+    if (odometer == null || !mounted) return;
+
+    setState(() => _starting = true);
+    try {
+      var confirmLower = false;
+      while (true) {
+        try {
+          await DriverActiveTrip.instance.startTrip(
+            route: route,
+            plateNumber: DriverSession.instance.plateNumber ?? '—',
+            startTime: DateTime.now(),
+            initialLocation: widget.currentLocation,
+            initialLocationIsReal: widget.hasRealFix,
+            startingOdometer: odometer,
+            confirmLowerOdometer: confirmLower,
+          );
+          break;
+        } on ApiException catch (e) {
+          if (e.body?['code'] == 'ODOMETER_LOWER_THAN_LAST' && !confirmLower) {
+            if (!mounted) return;
+            final proceed = await _confirmLowerOdometer(e.message);
+            if (proceed != true || !mounted) return;
+            confirmLower = true;
+            continue;
+          }
+          rethrow;
+        }
+      }
+    } on ApiException catch (e) {
+      _showStartError(e.message);
+      return;
+    } catch (_) {
+      _showStartError(
+        "Couldn't reach the server, so the trip wasn't started. Please check your connection and try again.",
+      );
+      return;
+    } finally {
+      if (mounted) setState(() => _starting = false);
+    }
+
+    if (!mounted) return;
+    Navigator.pop(
+      context,
+      DriverStartTripResult(
+        route: route,
+        plateNumber: DriverSession.instance.plateNumber ?? '—',
+        startingOdometer: odometer,
+      ),
+    );
+  }
+
+  void _showStartError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<bool?> _confirmLowerOdometer(String message) {
+    return showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text(
+          'Check the odometer',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+        ),
+        content: Text(
+          '$message\n\nIf you typed it wrong, go back and correct it. Start anyway only if this reading is right.',
+          style: const TextStyle(fontSize: 12, color: Colors.black54, fontWeight: FontWeight.w500),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Go Back', style: TextStyle(color: Colors.black54, fontWeight: FontWeight.w700)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Start Anyway', style: TextStyle(fontWeight: FontWeight.w800)),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -280,16 +380,22 @@ class _DriverStartTripScreenState extends State<DriverStartTripScreen> {
                 width: double.infinity,
                 height: 52,
                 child: ElevatedButton(
-                  onPressed: _confirm,
+                  onPressed: _starting ? null : _confirm,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primary,
                     elevation: 0,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                   ),
-                  child: const Text(
-                    'Start Trip',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppColors.onPrimary),
-                  ),
+                  child: _starting
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2.5, color: AppColors.onPrimary),
+                        )
+                      : const Text(
+                          'Start Trip',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppColors.onPrimary),
+                        ),
                 ),
               ),
             ),

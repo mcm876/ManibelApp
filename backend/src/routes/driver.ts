@@ -64,6 +64,8 @@ function toPublicTrip(trip: {
   currentLng: number | null;
   startedAt: Date;
   endedAt: Date | null;
+  startingOdometer?: number | null;
+  plateNumber?: string | null;
   isShortTrip: boolean;
   flagReason: string | null;
   driverExplanation: string | null;
@@ -81,6 +83,8 @@ function toPublicTrip(trip: {
     currentLng: trip.currentLng,
     startedAt: trip.startedAt,
     endedAt: trip.endedAt,
+    startingOdometer: trip.startingOdometer ?? null,
+    plateNumber: trip.plateNumber ?? null,
     isShortTrip: trip.isShortTrip,
     flagReason: trip.flagReason,
     driverExplanation: trip.driverExplanation,
@@ -595,6 +599,14 @@ const startTripSchema = z
     // moved. Both or neither.
     lat: z.number().min(-90).max(90).optional(),
     lng: z.number().min(-180).max(180).optional(),
+    // The vehicle's current odometer (km), required to start a NEW trip (not
+    // to resume one already ACTIVE). NaN/negative/absurd values are rejected
+    // here rather than trusted from the app's own check.
+    startingOdometer: z.number().finite().min(0).max(9_999_999).optional(),
+    // Set by the app only after the driver explicitly confirms an odometer
+    // that is lower than the vehicle's last recorded reading (see the
+    // ODOMETER_LOWER_THAN_LAST response below).
+    confirmLowerOdometer: z.boolean().optional(),
   })
   .refine((body) => (body.lat === undefined) === (body.lng === undefined), {
     message: 'lat and lng must be sent together.',
@@ -638,6 +650,36 @@ router.post('/trips/start', requireAuth('driver'), async (req, res, next) => {
       return;
     }
 
+    // A new trip must carry its starting odometer — saved in the same
+    // create() below, so there is never an ACTIVE trip without one.
+    if (body.startingOdometer === undefined) {
+      res.status(400).json({
+        error: "Please enter the vehicle's current odometer reading.",
+        code: 'ODOMETER_REQUIRED',
+      });
+      return;
+    }
+
+    // The same vehicle's most recent earlier reading — a lower one is almost
+    // always a typo, but not certain (a replaced odometer, a mistyped earlier
+    // entry), so it needs the driver's explicit confirmation rather than
+    // being a hard block that could lock a vehicle out of starting trips.
+    if (!body.confirmLowerOdometer) {
+      const previous = await prisma.trip.findFirst({
+        where: { plateNumber: driver.plateNumber, startingOdometer: { not: null } },
+        orderBy: { startedAt: 'desc' },
+        select: { startingOdometer: true },
+      });
+      if (previous?.startingOdometer != null && body.startingOdometer < previous.startingOdometer) {
+        res.status(409).json({
+          error: `That's lower than the last recorded reading for this vehicle (${previous.startingOdometer} km).`,
+          code: 'ODOMETER_LOWER_THAN_LAST',
+          lastOdometer: previous.startingOdometer,
+        });
+        return;
+      }
+    }
+
     // No "Trip Started" notification — the driver just tapped the button
     // that caused this, so they already know; a notification for it would
     // just be an echo. "Trip Completed" (below, in /trips/:id/end) stays,
@@ -646,6 +688,8 @@ router.post('/trips/start', requireAuth('driver'), async (req, res, next) => {
       data: {
         driverId: req.auth!.sub,
         route: body.route ?? null,
+        startingOdometer: body.startingOdometer,
+        plateNumber: driver.plateNumber,
         ...(hasLocation ? { currentLat: body.lat, currentLng: body.lng, locationUpdatedAt: new Date() } : {}),
       },
     });

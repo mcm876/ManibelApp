@@ -619,7 +619,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
     final trip = _ActiveTrip(
       route: result.route,
       plateNumber: result.plateNumber,
-      startTime: DateTime.now(),
+      startTime: DriverActiveTrip.instance.startTime ?? DateTime.now(),
     );
     setState(() => _activeTrip = trip);
     _fetchDemandSignals();

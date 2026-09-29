@@ -54,6 +54,10 @@ class DriverActiveTrip {
   String? plateNumber;
   DateTime? startTime;
 
+  /// Set only once the backend has confirmed the trip ended — freezes
+  /// [elapsed] at the real duration instead of letting it keep counting.
+  DateTime? endTime;
+
   LatLng? currentLocation;
 
   bool isActive = false;
@@ -89,10 +93,21 @@ class DriverActiveTrip {
       return Duration.zero;
     }
 
-    return DateTime.now().difference(startTime!);
+    return (endTime ?? DateTime.now()).difference(startTime!);
   }
 
+  /// True while an End Trip request is in flight — the UI disables the button
+  /// on this so a second tap can't send a second request.
+  bool get isEnding => _isEnding;
+  bool _isEnding = false;
+
   /// Start a new trip.
+  ///
+  /// The backend is called FIRST and this throws (an [ApiException]) if it
+  /// fails, leaving no trip started anywhere: [startingOdometer] is saved by
+  /// the backend in the same write that creates the trip, so there is never
+  /// an active trip without one, and a failed start never leaves a
+  /// half-started trip on the driver's device either.
   ///
   /// [initialLocationIsReal] says whether [initialLocation] is an actual GPS
   /// fix or just the map's fallback center — only a real one is ever sent to
@@ -102,6 +117,8 @@ class DriverActiveTrip {
     required String plateNumber,
     required DateTime startTime,
     required LatLng initialLocation,
+    required double startingOdometer,
+    bool confirmLowerOdometer = false,
     bool initialLocationIsReal = false,
   }) async {
     // If a trip is already active, don't start another one.
@@ -109,26 +126,35 @@ class DriverActiveTrip {
       return;
     }
 
+    final sendLocation = initialLocationIsReal;
+    final response = await ApiClient.post('/api/driver/trips/start', {
+      'route': route,
+      'startingOdometer': startingOdometer,
+      if (confirmLowerOdometer) 'confirmLowerOdometer': true,
+      if (sendLocation) 'lat': initialLocation.latitude,
+      if (sendLocation) 'lng': initialLocation.longitude,
+    }, token: DriverSession.instance.authToken);
+    final trip = response['trip'] as Map<String, dynamic>;
+
     this.route = route;
     this.plateNumber = plateNumber;
-    this.startTime = startTime;
+    // The backend's own start timestamp, so the timer and the stored trip
+    // agree on when it began.
+    this.startTime =
+        DateTime.tryParse(trip['startedAt'] as String? ?? '')?.toLocal() ??
+        startTime;
+    endTime = null;
 
     currentLocation = initialLocation;
     hasRealFix = initialLocationIsReal;
     isActive = true;
-    _backendTripId = null;
-    _lastLocationPingAt = null;
+    _backendTripId = trip['id'] as String?;
+    _lastLocationPingAt = sendLocation ? DateTime.now() : null;
 
     updateNotifier.value++;
 
     _startElapsedTimer();
     await _startLocationTracking();
-
-    // Best-effort — a failed call here shouldn't stop the driver from
-    // working locally; the heartbeat below keeps retrying it, so the trip
-    // still reaches the admin live map and commuters' booking map as soon as
-    // connectivity is back (see _backendTripId's doc comment).
-    await _registerWithBackend();
     _startHeartbeat();
   }
 
@@ -149,6 +175,7 @@ class DriverActiveTrip {
     this.route = route;
     this.plateNumber = plateNumber;
     this.startTime = startTime;
+    endTime = null;
 
     // The backend's last position may be minutes old — shown for orientation
     // only (grey marker) and never re-sent; the first live fix replaces it.
@@ -165,27 +192,6 @@ class DriverActiveTrip {
     _startHeartbeat();
   }
 
-  /// Creates (or, if one already exists, re-fetches) this driver's backend
-  /// Trip. Seeds it with the current position when that is a real GPS fix, so
-  /// the jeepney is on commuters' maps from the first second instead of only
-  /// once it starts moving.
-  Future<void> _registerWithBackend() async {
-    final here = currentLocation;
-    final sendLocation = hasRealFix && here != null;
-    try {
-      final response = await ApiClient.post('/api/driver/trips/start', {
-        'route': route,
-        if (sendLocation) 'lat': here.latitude,
-        if (sendLocation) 'lng': here.longitude,
-      }, token: DriverSession.instance.authToken);
-      _backendTripId =
-          (response['trip'] as Map<String, dynamic>)['id'] as String?;
-      if (sendLocation) _lastLocationPingAt = DateTime.now();
-    } catch (_) {
-      _backendTripId = null;
-    }
-  }
-
   void _startHeartbeat() {
     _heartbeatTimer?.cancel();
     _heartbeatTimer = Timer.periodic(_heartbeatInterval, (_) => _heartbeat());
@@ -194,11 +200,7 @@ class DriverActiveTrip {
   Future<void> _heartbeat() async {
     if (!isActive) return;
 
-    // The start call never made it (offline at the time) — keep trying.
-    if (_backendTripId == null) {
-      await _registerWithBackend();
-      return;
-    }
+    if (_backendTripId == null) return;
 
     final here = currentLocation;
     if (!hasRealFix || here == null) return;
@@ -336,40 +338,66 @@ class DriverActiveTrip {
 
   /// End the current trip.
   ///
-  /// This is the ONLY method that should stop the active trip.
+  /// This is the ONLY method that should stop the active trip, and it only
+  /// does so once the backend has CONFIRMED the trip ended. If the request
+  /// fails this throws (an [ApiException]) and changes nothing — the trip
+  /// stays active, the timer keeps running, GPS keeps reporting and the
+  /// driver stays On Trip — so they can simply retry. (Previously this tore
+  /// everything down first and swallowed a failed request, which left the
+  /// trip ACTIVE on the backend while the app showed it ended: the driver
+  /// looked Offline locally but stayed visible to commuters, and the trip was
+  /// re-adopted as active the next time the dashboard loaded.)
   ///
   /// Returns the backend's trip record from the /end response — this is
-  /// what carries isShortTrip/flagReason, which only the backend ever
-  /// computes (see computeShortTripFlag in driver.ts). Null if there was
-  /// no backend trip id to end, or the call failed (best-effort, same as
-  /// startTrip) — Trip History reads this trip fresh from the backend on
-  /// its own next load, so there's nothing to reconcile here.
+  /// what carries isShortTrip/flagReason and the authoritative
+  /// startedAt/endedAt, which only the backend ever sets (see
+  /// computeShortTripFlag in driver.ts). Returns null without doing anything
+  /// if a request is already in flight or there is no active trip. Ending is
+  /// idempotent server-side, so retrying after a lost response is safe.
   Future<Map<String, dynamic>?> endTrip() async {
+    if (!isActive || _isEnding) return null;
+
+    _isEnding = true;
+    updateNotifier.value++;
+
+    Map<String, dynamic>? tripJson;
+    try {
+      final tripId = _backendTripId;
+      if (tripId != null) {
+        final response = await ApiClient.post(
+          '/api/driver/trips/$tripId/end',
+          {},
+          token: DriverSession.instance.authToken,
+        );
+        tripJson = response['trip'] as Map<String, dynamic>?;
+      }
+    } catch (_) {
+      _isEnding = false;
+      updateNotifier.value++;
+      rethrow;
+    }
+
+    // Confirmed — now (and only now) stop everything.
+    endTime =
+        DateTime.tryParse(tripJson?['endedAt'] as String? ?? '')?.toLocal() ??
+        DateTime.now();
+    final started =
+        DateTime.tryParse(tripJson?['startedAt'] as String? ?? '')?.toLocal();
+    if (started != null) startTime = started;
+
     isActive = false;
+    hasRealFix = false;
+    _backendTripId = null;
+    _lastLocationPingAt = null;
 
     await _positionSubscription?.cancel();
     _positionSubscription = null;
-
     _elapsedTimer?.cancel();
     _elapsedTimer = null;
     _heartbeatTimer?.cancel();
     _heartbeatTimer = null;
 
-    Map<String, dynamic>? tripJson;
-    if (_backendTripId != null) {
-      try {
-        final response = await ApiClient.post(
-          '/api/driver/trips/$_backendTripId/end',
-          {},
-          token: DriverSession.instance.authToken,
-        );
-        tripJson = response['trip'] as Map<String, dynamic>?;
-      } catch (_) {
-        // Best-effort, same reasoning as startTrip's backend call.
-      }
-      _backendTripId = null;
-    }
-
+    _isEnding = false;
     updateNotifier.value++;
     return tripJson;
   }
@@ -468,20 +496,16 @@ class _DriverTripInProgressScreenState
   }
 
   Future<void> _initializeTrip() async {
-    // If this is a brand-new trip, start it.
+    // The trip is created by the Start Trip flow (which needs the odometer and
+    // a confirmed backend start) before this screen opens; nothing here may
+    // start one on its own. No active trip means there's nothing to show.
     if (!_activeTrip.isActive) {
-      await _activeTrip.startTrip(
-        route: widget.route,
-        plateNumber: widget.plateNumber,
-        startTime: widget.startTime,
-        initialLocation: widget.initialLocation,
-        initialLocationIsReal: widget.hasRealFix,
-      );
-    } else {
-      // If the trip is already active,
-      // we are simply returning to the trip screen.
-      await _activeTrip.resumeTracking();
+      if (mounted) Navigator.of(context).pop();
+      return;
     }
+
+    // We are simply returning to (or arriving at) the trip screen.
+    await _activeTrip.resumeTracking();
 
     if (!mounted) return;
 
@@ -595,7 +619,17 @@ class _DriverTripInProgressScreenState
   // END TRIP
   // -------------------------------------------------------------------------
 
+  void _showEndTripError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
   Future<void> _handleEndTrip() async {
+    // A request is already running — ignore extra taps.
+    if (_activeTrip.isEnding) return;
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) {
@@ -654,25 +688,32 @@ class _DriverTripInProgressScreenState
 
     if (confirmed != true || !mounted) return;
 
-    final now = DateTime.now();
-
-    final startTime = _activeTrip.startTime ?? widget.startTime;
-
     final route = _activeTrip.route ?? widget.route;
-
     final plateNumber = _activeTrip.plateNumber ?? widget.plateNumber;
 
-    final durationLabel = _formatDuration(now.difference(startTime));
+    // Ends the trip on the backend first; the tracker only stops the timer,
+    // GPS and the On Trip state once that succeeds, so a failure leaves the
+    // trip fully active for a retry.
+    final Map<String, dynamic>? tripJson;
+    try {
+      tripJson = await _activeTrip.endTrip();
+    } on ApiException catch (e) {
+      _showEndTripError(e.message);
+      return;
+    } catch (_) {
+      _showEndTripError(
+        "Couldn't reach the server. Your trip is still active — please try again.",
+      );
+      return;
+    }
 
-    // Stop the active trip — this is also what tells the backend the trip
-    // ended, which is what triggers the real "Trip Completed" notification
-    // (see DriverNotificationsScreen.fetchRemote(), polled elsewhere) — no
-    // local notification needed here anymore. Trip History reads this trip
-    // straight from the backend on its own next load, so nothing needs to
-    // be recorded locally either.
-    await _activeTrip.endTrip();
+    // null = a request was already in flight or the trip was already ended.
+    if (tripJson == null && _activeTrip.isActive) return;
 
     if (!mounted) return;
+
+    // Duration from the timestamps the backend stored, not a screen counter.
+    final durationLabel = _formatDuration(_activeTrip.elapsed);
 
     // Show completed dialog.
     await showDialog<void>(
@@ -1074,13 +1115,22 @@ class _DriverTripInProgressScreenState
                     width: double.infinity,
                     height: 56,
                     child: ElevatedButton.icon(
-                      onPressed: _handleEndTrip,
-                      icon: const Icon(
-                        Icons.stop_circle_rounded,
-                        color: Colors.white,
-                      ),
-                      label: const Text(
-                        'End Trip',
+                      onPressed: _activeTrip.isEnding ? null : _handleEndTrip,
+                      icon: _activeTrip.isEnding
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.5,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(
+                              Icons.stop_circle_rounded,
+                              color: Colors.white,
+                            ),
+                      label: Text(
+                        _activeTrip.isEnding ? 'Ending trip…' : 'End Trip',
                         style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w800,
@@ -1089,6 +1139,8 @@ class _DriverTripInProgressScreenState
                       ),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppColors.errorRed,
+                        disabledBackgroundColor:
+                            AppColors.errorRed.withOpacity(0.6),
                         elevation: 4,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(28),

@@ -4,6 +4,7 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/widgets/app_avatar.dart';
 import 'emergency_hotlines_screen.dart';
 import 'commuter_history_screen.dart';
+import 'scan_driver_qr_screen.dart';
 
 class CommuterMenuDrawer extends StatelessWidget {
   final String commuterName;
@@ -87,7 +88,30 @@ class CommuterMenuDrawer extends StatelessWidget {
                     _buildMenuDivider(),
 
                     // =====================================================
+                    // SCAN DRIVER QR — rate or report a driver from their QR
+                    // =====================================================
+                    _buildMenuButton(
+                      context: context,
+                      icon: Icons.qr_code_scanner_rounded,
+                      label: "Scan Driver QR",
+                      iconColor: AppColors.secondary,
+                      onTap: () {
+                        Navigator.pop(context);
+
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const ScanDriverQrScreen(),
+                          ),
+                        );
+                      },
+                    ),
+
+                    _buildMenuDivider(),
+
+                    // =====================================================
                     // EMERGENCY HOTLINES
+
                     // =====================================================
                     _buildMenuButton(
                       context: context,

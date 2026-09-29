@@ -220,6 +220,20 @@ model Trip {
   startedAt  DateTime   @default(now())
   endedAt    DateTime?
 
+  /// The vehicle's odometer reading (km) the driver entered before this trip
+  /// started — required by POST /api/driver/trips/start for any new trip and
+  /// saved in the same INSERT as the trip itself, so a trip never exists
+  /// without one. Null only on trips from before this field existed.
+  /// Compared against the previous reading for the same [plateNumber] to
+  /// catch a mistyped, lower-than-last value. No ending odometer yet.
+  startingOdometer Float?
+
+  /// The jeepney's plate at the moment the trip started (copied from the
+  /// driver's account) — this app has no separate Vehicle table, the plate
+  /// is the vehicle. Snapshotted so odometer history stays with the vehicle
+  /// even if the driver's plate is later edited or the vehicle changes hands.
+  plateNumber String?
+
   /// Set by the backend, never the client, the moment a trip ends (see
   /// POST /api/driver/trips/:id/end) — two escalating duration tiers,
   /// both far more likely to indicate a problem than a real completed
@@ -280,6 +294,8 @@ model Trip {
   @@index([driverId, route])
   @@index([driverId, isShortTrip])
   @@index([isShortTrip, reviewStatus])
+  // "The previous odometer reading for this vehicle" (POST /trips/start).
+  @@index([plateNumber, startedAt])
   // Also indexed, SQL-only (Prisma's schema DSL has no partial-index
   // syntax): a `[driverId, startedAt DESC] WHERE "currentLat" IS NOT NULL`
   // partial index for GET /admin/jeepneys's "most recently located trip

@@ -1643,6 +1643,92 @@ router.get('/trips', requireAuth('commuter'), async (req, res, next) => {
 });
 
 // ---------------------------------------------------------------------------
+// SCAN DRIVER QR — the commuter side menu's "Scan Driver QR": identify a
+// driver from the QR on their jeepney (the same backend-issued qrToken the
+// booking flow scans, see GET /api/driver/verify-qr) so the commuter can rate
+// or report them. Authenticated, unlike verify-qr, because it also answers
+// "which of MY rides can I rate this driver for" — and a token is only ever
+// looked up, never trusted: an unknown/forged one is a plain 404 and reveals
+// nothing about any driver.
+// ---------------------------------------------------------------------------
+
+router.get('/driver-by-qr/:token', requireAuth('commuter'), async (req, res, next) => {
+  try {
+    const token: string = Array.isArray(req.params.token) ? req.params.token[0] : req.params.token;
+    if (!/^[A-Za-z0-9_-]{8,128}$/.test(token)) {
+      res.status(404).json({ error: 'This QR code is not recognized.' });
+      return;
+    }
+
+    const driver = await prisma.driver.findUnique({ where: { qrToken: token } });
+    if (!driver || !driver.isActive) {
+      res.status(404).json({ error: 'This QR code is not recognized.' });
+      return;
+    }
+
+    const ratingInfo = await prisma.rating.aggregate({
+      where: { driverId: driver.id },
+      _avg: { stars: true },
+      _count: { stars: true },
+    });
+
+    // The route they're running right now, else the one on their latest trip.
+    const latestTrip = await prisma.trip.findFirst({
+      where: { driverId: driver.id },
+      orderBy: [{ status: 'asc' }, { startedAt: 'desc' }],
+      select: { route: true },
+    });
+
+    // Rides this commuter really took with this driver (a cancelled boarding
+    // means they never rode) — the same proof POST /trips/:tripId/rating
+    // demands. The newest not-yet-rated one is what a scan-to-rate attaches
+    // to; if every one is already rated, alreadyRated says so.
+    const boardings = await prisma.tripBoarding.findMany({
+      where: { commuterId: req.auth!.sub, status: { not: 'CANCELLED' } },
+      orderBy: { boardedAt: 'desc' },
+      take: 100,
+      select: { tripId: true },
+    });
+    const tripIds = [...new Set(boardings.map((b) => b.tripId))];
+    const theirTrips = tripIds.length
+      ? await prisma.trip.findMany({
+          where: { id: { in: tripIds }, driverId: driver.id },
+          orderBy: { startedAt: 'desc' },
+          select: { id: true },
+        })
+      : [];
+    const rated = theirTrips.length
+      ? await prisma.rating.findMany({
+          where: { commuterId: req.auth!.sub, tripId: { in: theirTrips.map((t) => t.id) } },
+          select: { tripId: true },
+        })
+      : [];
+    const ratedIds = new Set(rated.map((r) => r.tripId));
+    const ratableTrip = theirTrips.find((t) => !ratedIds.has(t.id));
+
+    // Deliberately the same narrow shape verify-qr exposes — never the mobile
+    // number, date of birth, license or internal ids.
+    res.json({
+      driver: {
+        driverId: driver.driverId,
+        fullName: driver.fullName,
+        plateNumber: driver.plateNumber,
+        photoUrl: driver.photoUrl,
+        averageRating: ratingInfo._avg.stars,
+        ratingCount: ratingInfo._count.stars,
+        route: latestTrip?.route ?? null,
+      },
+      // null when they've never ridden with this driver — the app then
+      // explains rating needs a ride, while reporting stays available.
+      ratableTripId: ratableTrip?.id ?? null,
+      alreadyRated: !ratableTrip && theirTrips.length > 0,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RATINGS — a commuter rating the driver of one specific trip they actually
 // boarded (see Rating's doc comment in schema.prisma). One per trip.
 // ---------------------------------------------------------------------------
