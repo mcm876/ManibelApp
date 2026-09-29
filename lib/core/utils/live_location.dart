@@ -143,7 +143,7 @@ Stream<Position> livePositionStream({
 /// driver's marker never left its starting point no matter how far they walked.
 ///
 /// Also, once a precise GPS lock has been seen, drops the coarse
-/// cell-tower/Wi-Fi readings Android sometimes interleaves — those are what
+/// cell-tower/Wi-Fi readings Android sometimes interleaves - those are what
 /// make a marker jump hundreds of meters sideways and back.
 Stream<Position> _dropOutOfOrder(Stream<Position> source) async* {
   DateTime? latest;
