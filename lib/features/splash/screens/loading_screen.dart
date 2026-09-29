@@ -5,6 +5,7 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_assets.dart';
 import '../../../core/widgets/rolling_road_loader.dart';
 import '../../../core/services/driver_operations_log.dart';
+import '../../../core/services/api_client.dart';
 import '../../../core/services/driver_session.dart';
 import '../../../core/services/user_session.dart';
 import '../../auth/screens/about_app_screen.dart';
@@ -40,15 +41,38 @@ class _LoadingScreenState extends State<LoadingScreen> {
     // already gone by then).
     Future.delayed(const Duration(seconds: 3), () async {
       try {
-        await _resolveSessionAndNavigate().timeout(const Duration(seconds: 8));
+        await _resolveSessionAndNavigate().timeout(const Duration(seconds: 20));
       } catch (_) {
         if (!mounted) return;
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const RoleSelectionScreen()),
-        );
+        // Something slow/failed while restoring the session. A saved login
+        // must NOT be mistaken for "signed out" — go to its dashboard if one
+        // is on hand, and only fall back to role selection with no session.
+        final Widget fallback;
+        if (DriverSession.instance.hasRememberedSession) {
+          fallback = const DriverDashboardScreen();
+        } else if (UserSession.instance.hasRememberedSession) {
+          fallback = const CommuterDashboardScreen();
+        } else {
+          fallback = const RoleSelectionScreen();
+        }
+        Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => fallback));
       }
     });
+  }
+
+  /// False only when the backend positively rejects the saved token (401/403).
+  /// Network errors and timeouts count as "still valid" — being offline at app
+  /// start must not log anyone out.
+  Future<bool> _sessionStillValid(String path, String? token) async {
+    if (token == null) return false;
+    try {
+      await ApiClient.get(path, token: token).timeout(const Duration(seconds: 6));
+      return true;
+    } on ApiException catch (e) {
+      return !(e.statusCode == 401 || e.statusCode == 403);
+    } catch (_) {
+      return true;
+    }
   }
 
   Future<void> _resolveSessionAndNavigate() async {
@@ -64,6 +88,12 @@ class _LoadingScreenState extends State<LoadingScreen> {
     if (!mounted) return;
 
     if (DriverSession.instance.hasRememberedSession) {
+      // Ask the backend whether this saved token is still good. A rejected
+      // one (expired/deactivated) has already been signed out and sent to
+      // the start screen by SessionGuard; an unreachable server is NOT a
+      // reason to sign anyone out, so the cached session is used offline.
+      if (!await _sessionStillValid('/api/driver/me', DriverSession.instance.authToken)) return;
+      if (!mounted) return;
       await DriverOperationsLog.loadFromPrefs();
       unawaited(DriverOperationsLog.syncFromBackend());
       if (!mounted) return;
@@ -75,6 +105,8 @@ class _LoadingScreenState extends State<LoadingScreen> {
     }
 
     if (UserSession.instance.hasRememberedSession) {
+      if (!await _sessionStillValid('/api/commuter/me', UserSession.instance.authToken)) return;
+      if (!mounted) return;
       await Future.wait([
         CommuterHistoryScreen.loadFromPrefs(),
         NotificationsScreen.loadFromPrefs(),

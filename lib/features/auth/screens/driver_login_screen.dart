@@ -33,7 +33,9 @@ class _DriverLoginScreenState extends State<DriverLoginScreen> {
 
   bool _isPasswordObscured = true;
   bool _isLoading = false;
-  bool _rememberMe = false;
+  // On by default: a driver/commuter stays signed in after closing the app
+  // until they tap Logout (or their session expires).
+  bool _rememberMe = true;
 
   // See CommuterLoginScreen's matching field for why.
   bool _hasAttemptedSubmit = false;

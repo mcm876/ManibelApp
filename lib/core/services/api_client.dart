@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'dart:async';
+
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 
@@ -17,6 +19,8 @@ const String _baseUrl = String.fromEnvironment(
   'API_BASE_URL',
   defaultValue: 'http://localhost:4000',
 );
+
+const Duration _requestTimeout = Duration(seconds: 25);
 
 /// Thrown for any non-2xx response; [message] is the backend's own
 /// `{ "error": "..." }` text when available, so callers can show it
@@ -187,17 +191,20 @@ class ApiClient {
 
     http.Response response;
     try {
+      // A request that never answers (dead mobile data, a stalled connection)
+      // must fail rather than leave a spinner up forever — most visibly on
+      // Login and End Trip.
       switch (method) {
         case 'POST':
-          response = await http.post(uri, headers: headers, body: jsonEncode(body));
+          response = await http.post(uri, headers: headers, body: jsonEncode(body)).timeout(_requestTimeout);
         case 'PATCH':
-          response = await http.patch(uri, headers: headers, body: jsonEncode(body));
+          response = await http.patch(uri, headers: headers, body: jsonEncode(body)).timeout(_requestTimeout);
         case 'PUT':
-          response = await http.put(uri, headers: headers, body: jsonEncode(body));
+          response = await http.put(uri, headers: headers, body: jsonEncode(body)).timeout(_requestTimeout);
         case 'DELETE':
-          response = await http.delete(uri, headers: headers, body: body != null ? jsonEncode(body) : null);
+          response = await http.delete(uri, headers: headers, body: body != null ? jsonEncode(body) : null).timeout(_requestTimeout);
         default:
-          response = await http.get(uri, headers: headers);
+          response = await http.get(uri, headers: headers).timeout(_requestTimeout);
       }
     } catch (_) {
       throw const ApiException(

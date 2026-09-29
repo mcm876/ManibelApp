@@ -142,7 +142,9 @@ class _ScanDriverQrScreenState extends State<ScanDriverQrScreen> {
       if (!mounted) return;
       // 404 = not a registered driver; anything else (401, 5xx, no
       // connection) is a problem on our side, not a bad QR.
-      setState(() => _stage = e.statusCode == 404 ? _Stage.notFound : _Stage.networkError);
+      // (A 404 with no JSON body means the server itself doesn't know this
+      // route yet — not a bad QR code.)
+      setState(() => _stage = e.statusCode == 404 && e.body != null ? _Stage.notFound : _Stage.networkError);
     } catch (_) {
       if (!mounted) return;
       setState(() => _stage = _Stage.networkError);

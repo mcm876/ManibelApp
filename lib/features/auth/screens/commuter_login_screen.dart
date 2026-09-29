@@ -30,7 +30,9 @@ class _CommuterLoginScreenState extends State<CommuterLoginScreen> {
 
   bool obscurePassword = true;
   bool _isLoading = false;
-  bool _rememberMe = false;
+  // On by default: a driver/commuter stays signed in after closing the app
+  // until they tap Logout (or their session expires).
+  bool _rememberMe = true;
 
   // False until the first Login tap — an empty field never shows a red
   // "required" message before that (see each _validate*'s own empty
