@@ -10,6 +10,7 @@ import '../../../core/constants/map_config.dart';
 import '../../../core/constants/route_path.dart';
 import '../../../core/services/api_client.dart';
 import '../../../core/services/driver_session.dart';
+import '../../../core/services/today_start_odometer.dart';
 import '../../../core/utils/live_location.dart';
 import '../../../core/utils/location_settings.dart';
 import '../widgets/passenger_info_sheet.dart';
@@ -145,6 +146,9 @@ class DriverActiveTrip {
         startTime;
     endTime = null;
 
+    // Daily Operations pre-fills "Start (km)" from the day's first trip.
+    unawaited(TodayStartOdometer.recordIfFirst(startingOdometer));
+
     currentLocation = initialLocation;
     hasRealFix = initialLocationIsReal;
     isActive = true;
@@ -260,48 +264,62 @@ class DriverActiveTrip {
       locationError = null;
       updateNotifier.value++;
 
-      _positionSubscription =
-          livePositionStream(
-            distanceFilterMeters: 3,
-            // Keeps position updates flowing while the driver's phone is
-            // locked or another app is in front — without this Android stops
-            // delivering them shortly after the app leaves the foreground,
-            // which silently freezes the jeepney on every commuter's map.
-            foregroundNotification: const ForegroundNotificationConfig(
-              notificationTitle: 'Trip in progress',
-              notificationText:
-                  'ManibelaApp is sharing your jeepney\'s live location.',
-              notificationChannelName: 'Trip tracking',
-              enableWakeLock: true,
-              setOngoing: true,
-            ),
-          ).listen(
-            (position) {
-              if (!isActive) return;
-
-              currentLocation = LatLng(position.latitude, position.longitude);
-
-              hasRealFix = true;
-              locationError = null;
-
-              updateNotifier.value++;
-              _pingLocationToBackend(position);
-            },
-            onError: (_) {
-              // The stream itself failed mid-trip (e.g. location services
-              // got switched off after tracking had already started) —
-              // surface it the same way an initial failure would be, rather
-              // than leaving the driver's last-known position silently
-              // stale with no explanation.
-              locationError = 'Lost your location. Tap to check your settings.';
-              isLocationErrorServiceDisabled = true;
-              updateNotifier.value++;
-            },
-          );
+      _listenToPositions(withForegroundService: true);
     } catch (_) {
       // If live tracking isn't available,
       // the initial location is still retained.
     }
+  }
+
+  /// Subscribes to the live position stream.
+  ///
+  /// [withForegroundService] keeps updates flowing while the phone is locked or
+  /// another app is in front (Android stops delivering them shortly after the
+  /// app leaves the foreground otherwise). If that service can't start on a
+  /// particular phone, the stream errors — rather than leaving the marker
+  /// frozen for the whole trip, it is restarted once as a plain foreground-only
+  /// stream; only if THAT fails too is the driver told location was lost.
+  void _listenToPositions({required bool withForegroundService}) {
+    _positionSubscription?.cancel();
+    _positionSubscription =
+        livePositionStream(
+          distanceFilterMeters: 3,
+          foregroundNotification: withForegroundService
+              ? const ForegroundNotificationConfig(
+                  notificationTitle: 'Trip in progress',
+                  notificationText:
+                      'ManibelaApp is sharing your jeepney\'s live location.',
+                  notificationChannelName: 'Trip tracking',
+                  enableWakeLock: true,
+                  setOngoing: true,
+                )
+              : null,
+        ).listen(
+          (position) {
+            if (!isActive) return;
+
+            currentLocation = LatLng(position.latitude, position.longitude);
+
+            hasRealFix = true;
+            locationError = null;
+
+            updateNotifier.value++;
+            _pingLocationToBackend(position);
+          },
+          onError: (_) {
+            if (!isActive) return;
+            if (withForegroundService) {
+              _listenToPositions(withForegroundService: false);
+              return;
+            }
+            // The plain stream failed too (e.g. location services got
+            // switched off after tracking had already started) — surface it
+            // instead of leaving the last-known position silently stale.
+            locationError = 'Lost your location. Tap to check your settings.';
+            isLocationErrorServiceDisabled = true;
+            updateNotifier.value++;
+          },
+        );
   }
 
   /// Reports the driver's current position to the backend so the admin

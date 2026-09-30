@@ -21,7 +21,7 @@ const Duration kMaxFixAge = Duration(seconds: 30);
 
 /// After a precise fix, readings worse than this are treated as glitches
 /// (network-location jumps) and ignored rather than moving the marker.
-const double kJumpRejectMeters = 50;
+const double kJumpRejectMeters = 300;
 
 /// Whether [position] is a genuinely current reading rather than a cached one.
 bool isFreshFix(Position position) {

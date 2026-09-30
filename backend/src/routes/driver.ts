@@ -781,6 +781,15 @@ router.post('/trips/:id/end', requireAuth('driver'), async (req, res, next) => {
         where: { tripId: id, alightedAt: null },
         data: { alightedAt: endedAt, status: 'COMPLETED' },
       });
+    }
+
+    // The trip is now really ended in the database — answer the driver's app
+    // right away. Notifications are only courtesy messages; they used to run
+    // before the response, which made End Trip slow and, if any one of them
+    // threw, made an already-ended trip come back to the app as an error.
+    res.json({ trip: toPublicTrip(updated) });
+
+    try {
       await Promise.all(
         openBoardings.map((b) =>
           notifyCommuter({
@@ -792,39 +801,39 @@ router.post('/trips/:id/end', requireAuth('driver'), async (req, res, next) => {
           }),
         ),
       );
-    }
 
-    await notifyDriver({
-      recipientId: req.auth!.sub,
-      title: 'Trip Completed',
-      message: updated.route ? `${updated.route} has ended.` : 'Your trip has ended.',
-      type: 'TRIP_COMPLETED',
-      referenceId: updated.id,
-    });
-
-    if (isShortTrip) {
-      const routeLabel = updated.route ?? 'your trip';
       await notifyDriver({
         recipientId: req.auth!.sub,
-        title: 'Short Trip Flagged',
-        message: `${routeLabel} was flagged as unusually short (${flagReason}). Tap to explain what happened.`,
-        type: 'TRIP_SHORT_FLAGGED',
+        title: 'Trip Completed',
+        message: updated.route ? `${updated.route} has ended.` : 'Your trip has ended.',
+        type: 'TRIP_COMPLETED',
         referenceId: updated.id,
       });
 
-      // Admins otherwise only find out once a driver bothers to submit an
-      // explanation (see PATCH /trips/:id/explanation) — this way a
-      // flagged trip that never gets explained still surfaces for review.
-      const driver = await prisma.driver.findUnique({ where: { id: req.auth!.sub } });
-      await notifyAdmin({
-        title: 'Short trip flagged',
-        message: `${driver?.fullName ?? 'A driver'} (${driver?.plateNumber ?? '—'})'s trip on ${routeLabel} was flagged as unusually short — needs review.`,
-        type: 'TRIP_SHORT_FLAGGED',
-        referenceId: updated.driverId,
-      });
-    }
+      if (isShortTrip) {
+        const routeLabel = updated.route ?? 'your trip';
+        await notifyDriver({
+          recipientId: req.auth!.sub,
+          title: 'Short Trip Flagged',
+          message: `${routeLabel} was flagged as unusually short (${flagReason}). Tap to explain what happened.`,
+          type: 'TRIP_SHORT_FLAGGED',
+          referenceId: updated.id,
+        });
 
-    res.json({ trip: toPublicTrip(updated) });
+        // Admins otherwise only find out once a driver bothers to submit an
+        // explanation (see PATCH /trips/:id/explanation) — this way a
+        // flagged trip that never gets explained still surfaces for review.
+        const driver = await prisma.driver.findUnique({ where: { id: req.auth!.sub } });
+        await notifyAdmin({
+          title: 'Short trip flagged',
+          message: `${driver?.fullName ?? 'A driver'} (${driver?.plateNumber ?? '—'})'s trip on ${routeLabel} was flagged as unusually short — needs review.`,
+          type: 'TRIP_SHORT_FLAGGED',
+          referenceId: updated.driverId,
+        });
+      }
+    } catch (notifyErr) {
+      console.error('End-trip notifications failed (trip already ended):', notifyErr);
+    }
   } catch (err) {
     next(err);
   }
@@ -1225,10 +1234,17 @@ router.get('/today-stats', requireAuth('driver'), async (req, res, next) => {
     const today = todayDateOnly();
     const startOfToday = manilaMidnight(formatDateOnly(today));
 
-    const [tripsToday, todayLog] = await Promise.all([
+    const [tripsToday, todayLog, firstTripToday] = await Promise.all([
       prisma.trip.count({ where: { driverId: req.auth!.sub, startedAt: { gte: startOfToday } } }),
       prisma.driverDailyLog.findUnique({
         where: { driverId_date: { driverId: req.auth!.sub, date: today } },
+      }),
+      // The odometer the driver entered at the start of today's first trip —
+      // pre-fills "Start (km)" on the Daily Operations screen.
+      prisma.trip.findFirst({
+        where: { driverId: req.auth!.sub, startedAt: { gte: startOfToday }, startingOdometer: { not: null } },
+        orderBy: { startedAt: 'asc' },
+        select: { startingOdometer: true },
       }),
     ]);
 
@@ -1244,6 +1260,7 @@ router.get('/today-stats', requireAuth('driver'), async (req, res, next) => {
 
     res.json({
       tripsToday,
+      startingOdometerToday: firstTripToday?.startingOdometer ?? null,
       // Gross — kept for anything still reading it; the dashboard's
       // "Earnings Today" card now shows netIncomeToday instead.
       earningsToday: earnings,

@@ -6,6 +6,11 @@
          foreground location service, started only while a trip is active) —
          without it the jeepney freezes/disappears on commuters' maps. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <!-- The driver's trip-tracking service asks for a wake lock (enableWakeLock
+         in DriverActiveTrip) so GPS keeps reporting with the screen off.
+         Without this declared, Android throws SecurityException the moment
+         the service starts and the driver's location stream never delivers. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.CAMERA"/>

@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/constants/app_colors.dart';
+import '../../../core/services/api_client.dart';
 import '../../../core/services/driver_operations_log.dart';
+import '../../../core/services/driver_session.dart';
+import '../../../core/services/today_start_odometer.dart';
 
 /// Lets the driver log today's odometer readings, earnings, and expenses,
 /// then computes the numbers that actually matter: distance driven, net
@@ -30,9 +33,49 @@ class _DriverDailyOperationsScreenState
   /// why their fields briefly changed if the sync corrects something.
   bool _isSyncing = true;
 
+  /// Today's first trip's starting odometer (km), shown as the Start reading
+  /// so the driver only has to type the End reading. Null until known.
+  double? _tripStartOdo;
+
+  /// Fills "Start (km)" from the odometer entered when today's first trip was
+  /// started — the phone's own record first (instant, works offline), then the
+  /// server's (authoritative across devices). Never overwrites a Start value
+  /// the driver has typed or already saved for today.
+  Future<void> _prefillStartFromTrip() async {
+    final local = await TodayStartOdometer.read();
+    if (local != null) _applyTripStart(local);
+
+    final token = DriverSession.instance.authToken;
+    if (token == null) return;
+    try {
+      final response = await ApiClient.get('/api/driver/today-stats', token: token);
+      final remote = (response['startingOdometerToday'] as num?)?.toDouble();
+      if (remote != null) _applyTripStart(remote);
+    } catch (_) {
+      // Best-effort — the phone's own copy above may already have filled it.
+    }
+  }
+
+  void _applyTripStart(double km) {
+    if (!mounted) return;
+    setState(() {
+      _tripStartOdo = km;
+      final saved = DriverOperationsLog.todayEntry?.startOdo ?? 0;
+      if (!_startTouched && saved == 0) {
+        _startOdoController.removeListener(_onFieldChanged);
+        _startOdoController.text = _numOrEmpty(km);
+        _startOdoController.addListener(_onFieldChanged);
+      }
+    });
+  }
+
+  /// Whether the driver typed in the Start field themselves.
+  bool _startTouched = false;
+
   @override
   void initState() {
     super.initState();
+    _prefillStartFromTrip();
     final existing = DriverOperationsLog.todayEntry;
     _startOdoController = TextEditingController(
       text: _numOrEmpty(existing?.startOdo),
@@ -59,6 +102,7 @@ class _DriverDailyOperationsScreenState
     ]) {
       c.addListener(_onFieldChanged);
     }
+    _startOdoController.addListener(() => _startTouched = true);
 
     // A fresh sync before this form is really usable — if today's entry
     // (or the lack of one) changed on the backend since the last sync
@@ -72,7 +116,9 @@ class _DriverDailyOperationsScreenState
       setState(() {
         if (!_dirty) {
           final refreshed = DriverOperationsLog.todayEntry;
-          _startOdoController.text = _numOrEmpty(refreshed?.startOdo);
+          _startOdoController.text = _numOrEmpty(
+            (refreshed?.startOdo ?? 0) != 0 ? refreshed?.startOdo : _tripStartOdo,
+          );
           _endOdoController.text = _numOrEmpty(refreshed?.endOdo);
           _earningsController.text = _numOrEmpty(refreshed?.totalEarnings);
           _fuelController.text = _numOrEmpty(refreshed?.fuelExpense);
@@ -225,6 +271,17 @@ class _DriverDailyOperationsScreenState
                       ),
                     ],
                   ),
+                  if (_tripStartOdo != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Start reading taken from your first trip today. Just enter your End reading when you\'re done.',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black45,
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 20),
                   const _SectionTitle(title: 'Earnings'),
                   const SizedBox(height: 10),
