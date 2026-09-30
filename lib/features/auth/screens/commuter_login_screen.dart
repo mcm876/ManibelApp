@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'commuter_signup_screen.dart';
 import 'commuter_verification_status_screen.dart';
 import 'forgot_password_screen.dart';
+import 'role_selection_screen.dart';
 import '../../commuter/screens/commuter_dashboard_screen.dart';
 import '../../commuter/screens/commuter_history_screen.dart';
 import '../../commuter/screens/notifications_screen.dart';
@@ -510,6 +511,29 @@ class _CommuterLoginScreenState extends State<CommuterLoginScreen> {
                             ),
                           ),
                         ],
+                      ),
+
+                      const SizedBox(height: 20),
+
+                      // Same way back to role selection the driver login has.
+                      Center(
+                        child: GestureDetector(
+                          onTap: () {
+                            Navigator.pushAndRemoveUntil(
+                              context,
+                              MaterialPageRoute(builder: (_) => const RoleSelectionScreen()),
+                              (route) => false,
+                            );
+                          },
+                          child: const Text(
+                            'Back to Welcome',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.logoBlue,
+                            ),
+                          ),
+                        ),
                       ),
                     ],
                   ),

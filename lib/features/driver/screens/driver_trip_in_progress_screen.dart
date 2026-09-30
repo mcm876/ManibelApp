@@ -89,6 +89,12 @@ class DriverActiveTrip {
 
   final ValueNotifier<int> updateNotifier = ValueNotifier<int>(0);
 
+  /// Ticks once a second while a trip runs — ONLY the timer label listens to
+  /// this. It used to bump [updateNotifier] instead, which rebuilt the whole
+  /// trip screen (map, markers, route line) and the dashboard map every
+  /// second just to redraw "05:42".
+  final ValueNotifier<int> tickNotifier = ValueNotifier<int>(0);
+
   Duration get elapsed {
     if (startTime == null) {
       return Duration.zero;
@@ -224,7 +230,7 @@ class DriverActiveTrip {
     _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!isActive) return;
 
-      updateNotifier.value++;
+      tickNotifier.value++;
     });
   }
 
@@ -416,6 +422,7 @@ class DriverActiveTrip {
     _heartbeatTimer = null;
 
     _isEnding = false;
+    tickNotifier.value++;
     updateNotifier.value++;
     return tripJson;
   }
@@ -1018,12 +1025,15 @@ class _DriverTripInProgressScreenState
                                         backgroundColor: Colors.green,
                                       ),
                                       const SizedBox(width: 6),
-                                      Text(
-                                        _activeTrip.elapsedLabel,
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w800,
-                                          color: Colors.green,
+                                      ValueListenableBuilder<int>(
+                                        valueListenable: _activeTrip.tickNotifier,
+                                        builder: (_, _, _) => Text(
+                                          _activeTrip.elapsedLabel,
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w800,
+                                            color: Colors.green,
+                                          ),
                                         ),
                                       ),
                                     ],

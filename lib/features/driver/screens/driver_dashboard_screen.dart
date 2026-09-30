@@ -161,16 +161,24 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
         if (mounted) setState(() {});
       });
     });
-    _licenseStatusPollTimer = Timer.periodic(
-      const Duration(seconds: 20),
-      (_) => _refreshLicenseStatus(),
-    );
+    _licenseStatusPollTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+      if (_isCovered) return;
+      _refreshLicenseStatus();
+    });
     _fetchDemandSignals();
-    _demandPollTimer = Timer.periodic(
-      const Duration(seconds: 15),
-      (_) => _fetchDemandSignals(),
-    );
+    _demandPollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (_isCovered) return;
+      _fetchDemandSignals();
+    });
   }
+
+  /// True while the Start Trip or live trip screen is on top of this one —
+  /// both poll the same demand signals themselves, so polling from underneath
+  /// just doubled the requests and battery use. (Not tied to "any screen is on
+  /// top": the expanded-map sheet is also a route and needs live data.)
+  bool _tripScreenOpen = false;
+
+  bool get _isCovered => !mounted || _tripScreenOpen;
 
   /// Pulls raw demand-signal pings from the last hour and clusters them
   /// into map cells (~100m) client-side — the driver-side twin of admin's
@@ -604,6 +612,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
       return;
     }
 
+    _tripScreenOpen = true;
     final result = await Navigator.push<DriverStartTripResult>(
       context,
       MaterialPageRoute(
@@ -613,6 +622,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
         ),
       ),
     );
+    _tripScreenOpen = false;
 
     if (result == null || !mounted) return;
 
@@ -635,6 +645,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
   }
 
   Future<void> _openTripInProgress(_ActiveTrip trip) async {
+    _tripScreenOpen = true;
     final ended = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
@@ -648,6 +659,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
       ),
     );
 
+    _tripScreenOpen = false;
     if (!mounted) return;
     if (ended == true) {
       // The backend already has this trip (POST /trips/:id/end already
