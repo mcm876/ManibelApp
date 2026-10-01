@@ -759,10 +759,6 @@ router.post('/trips/:id/end', requireAuth('driver'), async (req, res, next) => {
     const endedAt = new Date();
     const { isShortTrip, flagReason } = computeShortTripFlag(trip.startedAt, endedAt);
 
-    const updated = await prisma.trip.update({
-      where: { id },
-      data: { status: 'COMPLETED', endedAt, isShortTrip, flagReason },
-    });
 
     // A commuter still marked onboard when the *driver* ends the trip
     // (as opposed to tapping their own "Para Po"/End Trip — see POST
@@ -772,10 +768,18 @@ router.post('/trips/:id/end', requireAuth('driver'), async (req, res, next) => {
     // boarding record itself never closes, and they're never told the
     // trip actually ended. Close every open boarding out here too, same
     // as a real alight, and let each of them know.
-    const openBoardings = await prisma.tripBoarding.findMany({
-      where: { tripId: id, alightedAt: null },
-      select: { commuterId: true },
-    });
+    // The trip update and the open-boardings lookup don't depend on each
+    // other, so run them together — End Trip waits on every round trip here.
+    const [updated, openBoardings] = await Promise.all([
+      prisma.trip.update({
+        where: { id },
+        data: { status: 'COMPLETED', endedAt, isShortTrip, flagReason },
+      }),
+      prisma.tripBoarding.findMany({
+        where: { tripId: id, alightedAt: null },
+        select: { commuterId: true },
+      }),
+    ]);
     if (openBoardings.length > 0) {
       await prisma.tripBoarding.updateMany({
         where: { tripId: id, alightedAt: null },

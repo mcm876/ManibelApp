@@ -944,14 +944,6 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
               ),
               const SizedBox(height: 16),
 
-              if (_licenseStatus != 'APPROVED') ...[
-                _LicenseVerificationNote(
-                  status: _licenseStatus,
-                  onTap: _openSettings,
-                ),
-                const SizedBox(height: 16),
-              ],
-
               if (_activeTrip != null) ...[
                 _buildActiveTripCard(),
                 const SizedBox(height: 16),
@@ -1574,62 +1566,6 @@ class _LocationFailure {
     this.isServiceDisabled = false,
     this.canRetryPrompt = false,
   });
-}
-
-/// Dashboard note shown until this driver's license is verified — see
-/// _handleStartTrip's matching gate on the Start Trip button itself.
-class _LicenseVerificationNote extends StatelessWidget {
-  const _LicenseVerificationNote({required this.status, required this.onTap});
-
-  /// null | 'PENDING' | 'REJECTED' — never 'APPROVED' (the caller doesn't
-  /// render this widget at all once approved).
-  final String? status;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final isPending = status == 'PENDING';
-    final message = isPending
-        ? "Your license is being reviewed by an admin. You'll be able to start a trip once it's verified."
-        : "Upload your license to start accepting trips.";
-
-    return InkWell(
-      borderRadius: BorderRadius.circular(16),
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: isPending ? const Color(0xFFFFF4CC) : const Color(0xFFFDE2E2),
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              isPending ? Icons.hourglass_top_rounded : Icons.badge_outlined,
-              color: isPending
-                  ? const Color(0xFF92600A)
-                  : const Color(0xFFB91C1C),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                message,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: isPending
-                      ? const Color(0xFF92600A)
-                      : const Color(0xFFB91C1C),
-                ),
-              ),
-            ),
-            if (!isPending)
-              Icon(Icons.chevron_right_rounded, color: const Color(0xFFB91C1C)),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 // Round white icon button — same look as the commuter dashboard's floating
