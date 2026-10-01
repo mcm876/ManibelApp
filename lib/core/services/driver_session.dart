@@ -78,10 +78,10 @@ class DriverSession {
   // login/signup, never returned by the backend itself.
   String? password;
 
-  /// True when the driver checked "Remember Me" at login — the splash
-  /// screen only auto-signs a cold-started app into the dashboard when
-  /// this is true *and* [authToken] is still on disk. Explicitly logging
-  /// out always clears both, regardless of this flag.
+  /// True when the driver checked "Remember Me" at login. This only controls
+  /// whether the login screen pre-fills the mobile number next time
+  /// ([lastSuggestedMobileNumber]); it does NOT affect staying signed in
+  /// after the app closes — see [hasRememberedSession].
   bool rememberMe = false;
 
   /// The mobile number DriverLoginScreen suggests/pre-fills — separate
@@ -146,9 +146,11 @@ class DriverSession {
     if (legacyAuthToken != null) await prefs.remove(_kAuthToken);
   }
 
-  /// True only when a cold-started app should skip straight to the
-  /// dashboard instead of role selection/login.
-  bool get hasRememberedSession => rememberMe && authToken != null;
+  /// True when a cold-started app should skip straight to the dashboard
+  /// instead of role selection/login. Depends only on a saved [authToken]
+  /// (in secure storage), NOT on [rememberMe] — a user stays signed in
+  /// until they explicitly log out, which wipes the token.
+  bool get hasRememberedSession => authToken != null;
 
   Future<void> _persist() async {
     final prefs = await SharedPreferences.getInstance();

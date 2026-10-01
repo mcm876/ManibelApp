@@ -60,11 +60,10 @@ class UserSession {
   /// AboutAppScreen instead of role selection — see LoadingScreen.
   String? pendingVerificationMobileNumber;
 
-  /// True when the commuter checked "Remember Me" at login/signup — the
-  /// splash screen only auto-signs a cold-started app into the dashboard
-  /// when this is true *and* [authToken] is still on disk. Explicitly
-  /// logging out always clears both, regardless of this flag, so "log
-  /// out" reliably means "ask me to log in again next time."
+  /// True when the commuter checked "Remember Me" at login. This only controls
+  /// whether the login screen pre-fills the mobile number next time
+  /// ([lastSuggestedMobileNumber]); it does NOT affect staying signed in
+  /// after the app closes — see [hasRememberedSession].
   bool rememberMe = false;
 
   /// The mobile number CommuterLoginScreen suggests/pre-fills — separate
@@ -128,9 +127,11 @@ class UserSession {
     lastSuggestedMobileNumber = prefs.getString(_kLastSuggestedMobileNumber);
   }
 
-  /// True only when a cold-started app should skip straight to the
-  /// dashboard instead of role selection/login.
-  bool get hasRememberedSession => rememberMe && authToken != null;
+  /// True when a cold-started app should skip straight to the dashboard
+  /// instead of role selection/login. Depends only on a saved [authToken]
+  /// (in secure storage), NOT on [rememberMe] — a user stays signed in
+  /// until they explicitly log out, which wipes the token.
+  bool get hasRememberedSession => authToken != null;
 
   /// Marks [mobileNumber] as awaiting ID verification, so a cold-started
   /// app can be routed back to AboutAppScreen instead of role selection
