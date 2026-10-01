@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/qr_constants.dart';
@@ -528,12 +531,45 @@ class _ReportDriverFormState extends State<_ReportDriverForm> {
   String? _reason;
   bool _submitting = false;
   String? _error;
+  File? _photo;
   final TextEditingController _details = TextEditingController();
 
   @override
   void dispose() {
     _details.dispose();
     super.dispose();
+  }
+
+  /// Optional photo evidence the admin sees next to the report.
+  Future<void> _pickPhoto() async {
+    if (_submitting) return;
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_camera_rounded, color: AppColors.logoBlue),
+              title: const Text('Take Photo'),
+              onTap: () => Navigator.pop(sheetContext, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_rounded, color: AppColors.logoBlue),
+              title: const Text('Choose from Gallery'),
+              onTap: () => Navigator.pop(sheetContext, ImageSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null || !mounted) return;
+    try {
+      final picked = await ImagePicker().pickImage(source: source, imageQuality: 85);
+      if (picked != null && mounted) setState(() => _photo = File(picked.path));
+    } catch (_) {
+      if (mounted) setState(() => _error = "Couldn't open the camera or gallery. Please check app permissions.");
+    }
   }
 
   Future<void> _submit() async {
@@ -557,7 +593,7 @@ class _ReportDriverFormState extends State<_ReportDriverForm> {
       // the admin's existing Complaints queue (PENDING) — no separate system.
       await ApiClient.uploadFiles(
         '/api/commuter/complaints',
-        files: const {},
+        files: _photo != null ? {'attachment': _photo!.path} : const {},
         fields: {
           'plateNumber': widget.driver.plateNumber,
           if (widget.driver.ratableTripId != null) 'tripId': widget.driver.ratableTripId!,
@@ -640,6 +676,45 @@ class _ReportDriverFormState extends State<_ReportDriverForm> {
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
               ),
             ),
+            const SizedBox(height: 10),
+            const Text('Photo Evidence (optional)', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 8),
+            InkWell(
+              onTap: _submitting ? null : _pickPhoto,
+              borderRadius: BorderRadius.circular(14),
+              child: Container(
+                height: 140,
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0xFFEDEDED)),
+                ),
+                child: _photo != null
+                    ? ClipRRect(
+                        borderRadius: BorderRadius.circular(14),
+                        child: Image.file(_photo!, fit: BoxFit.cover, width: double.infinity),
+                      )
+                    : const Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.add_a_photo_outlined, color: Colors.black38, size: 28),
+                            SizedBox(height: 6),
+                            Text('Tap to add a photo', style: TextStyle(fontSize: 12, color: Colors.black45)),
+                          ],
+                        ),
+                      ),
+              ),
+            ),
+            if (_photo != null)
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: _submitting ? null : () => setState(() => _photo = null),
+                  child: const Text('Remove photo', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w700)),
+                ),
+              ),
             if (_error != null) ...[
               const SizedBox(height: 4),
               Text(_error!, style: const TextStyle(fontSize: 12, color: Colors.red, fontWeight: FontWeight.w600)),

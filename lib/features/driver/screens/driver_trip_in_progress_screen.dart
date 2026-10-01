@@ -414,7 +414,10 @@ class DriverActiveTrip {
     _backendTripId = null;
     _lastLocationPingAt = null;
 
-    await _positionSubscription?.cancel();
+    // Not awaited: the trip is already confirmed ended, and the platform's
+    // GPS shutdown can take seconds on some devices — the driver shouldn't
+    // sit on the End Trip button waiting for it.
+    unawaited(_positionSubscription?.cancel());
     _positionSubscription = null;
     _elapsedTimer?.cancel();
     _elapsedTimer = null;

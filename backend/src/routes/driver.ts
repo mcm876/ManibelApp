@@ -760,40 +760,39 @@ router.post('/trips/:id/end', requireAuth('driver'), async (req, res, next) => {
     const { isShortTrip, flagReason } = computeShortTripFlag(trip.startedAt, endedAt);
 
 
-    // A commuter still marked onboard when the *driver* ends the trip
-    // (as opposed to tapping their own "Para Po"/End Trip — see POST
-    // /api/commuter/alight) would otherwise stay stuck with alightedAt
-    // still null forever: their own active-trip check already stops
-    // showing them as riding once trip.status flips off ACTIVE, but the
-    // boarding record itself never closes, and they're never told the
-    // trip actually ended. Close every open boarding out here too, same
-    // as a real alight, and let each of them know.
-    // The trip update and the open-boardings lookup don't depend on each
-    // other, so run them together — End Trip waits on every round trip here.
-    const [updated, openBoardings] = await Promise.all([
-      prisma.trip.update({
-        where: { id },
-        data: { status: 'COMPLETED', endedAt, isShortTrip, flagReason },
-      }),
-      prisma.tripBoarding.findMany({
-        where: { tripId: id, alightedAt: null },
-        select: { commuterId: true },
-      }),
-    ]);
-    if (openBoardings.length > 0) {
-      await prisma.tripBoarding.updateMany({
-        where: { tripId: id, alightedAt: null },
-        data: { alightedAt: endedAt, status: 'COMPLETED' },
-      });
-    }
+    const updated = await prisma.trip.update({
+      where: { id },
+      data: { status: 'COMPLETED', endedAt, isShortTrip, flagReason },
+    });
 
     // The trip is now really ended in the database — answer the driver's app
-    // right away. Notifications are only courtesy messages; they used to run
-    // before the response, which made End Trip slow and, if any one of them
-    // threw, made an already-ended trip come back to the app as an error.
+    // right away; End Trip is waited on by a person staring at a button, so
+    // everything below is follow-up work that must not hold the response.
+    // (Notifications used to run before the response, and then so did the
+    // boarding clean-up; if anything below threw, an already-ended trip came
+    // back to the app as an error.)
     res.json({ trip: toPublicTrip(updated) });
 
     try {
+      // A commuter still marked onboard when the *driver* ends the trip
+      // (as opposed to tapping their own "Para Po"/End Trip — see POST
+      // /api/commuter/alight) would otherwise stay stuck with alightedAt
+      // still null forever: their own active-trip check already stops
+      // showing them as riding once trip.status flips off ACTIVE, but the
+      // boarding record itself never closes, and they're never told the
+      // trip actually ended. Close every open boarding out here too, same
+      // as a real alight, and let each of them know.
+      const openBoardings = await prisma.tripBoarding.findMany({
+        where: { tripId: id, alightedAt: null },
+        select: { commuterId: true },
+      });
+      if (openBoardings.length > 0) {
+        await prisma.tripBoarding.updateMany({
+          where: { tripId: id, alightedAt: null },
+          data: { alightedAt: endedAt, status: 'COMPLETED' },
+        });
+      }
+
       await Promise.all(
         openBoardings.map((b) =>
           notifyCommuter({
