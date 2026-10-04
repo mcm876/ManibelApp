@@ -48,7 +48,7 @@ export function idRejectionMessage(input: {
   hasExpiry: boolean;
 }): string | null {
   if (input.idBirthDate && calculateAge(input.idBirthDate) < MIN_ADULT_AGE) {
-    return `The birthdate on this ID shows you are under ${MIN_ADULT_AGE}. You must be ${MIN_ADULT_AGE} or older to use ManibelaApp.`;
+    return `The birthdate on this ID shows you are under ${MIN_ADULT_AGE}. You must be ${MIN_ADULT_AGE} or older to use ManibelApp.`;
   }
   if (input.hasExpiry && input.idExpiryDate && isIdExpired(input.idExpiryDate)) {
     return 'This ID has expired. Please use a valid, unexpired ID.';

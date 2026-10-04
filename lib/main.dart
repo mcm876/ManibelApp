@@ -4,17 +4,17 @@ import 'features/splash/screens/loading_screen.dart';
 
 void main() {
   SessionGuard.install();
-  runApp(const ManibelaApp());
+  runApp(const ManibelApp());
 }
 
-class ManibelaApp extends StatelessWidget {
-  const ManibelaApp({super.key});
+class ManibelApp extends StatelessWidget {
+  const ManibelApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       navigatorKey: SessionGuard.navigatorKey,
-      title: 'ManibelaApp',
+      title: 'ManibelApp',
       debugShowCheckedModeBanner: false,
       home: const LoadingScreen(),
     );

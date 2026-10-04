@@ -56,7 +56,7 @@ app.use(express.json());
 app.use('/api', apiLimiter);
 
 app.get('/', (_req, res) => {
-  res.json({ name: 'ManibelaApp backend', health: '/api/health' });
+  res.json({ name: 'ManibelApp backend', health: '/api/health' });
 });
 
 app.use('/api/health', healthRouter);
@@ -68,7 +68,7 @@ app.use(errorHandler);
 
 const PORT = Number(process.env.PORT ?? 4000);
 app.listen(PORT, () => {
-  console.log(`ManibelaApp backend listening on http://localhost:${PORT}`);
+  console.log(`ManibelApp backend listening on http://localhost:${PORT}`);
 });
 
 startDriverLogReminderJobs();

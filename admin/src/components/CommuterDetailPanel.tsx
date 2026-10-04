@@ -13,6 +13,7 @@ interface CommuterDetail {
   commuterId: string;
   fullName: string;
   mobileNumber: string;
+  email: string | null;
   dateOfBirth: string | null;
   photoUrl: string | null;
   phoneVerified: boolean;
@@ -239,6 +240,7 @@ export function CommuterDetailPanel({
                 <p className="text-xs text-gray-500">
                   {commuter.commuterId} · {formatPhone(commuter.mobileNumber)}
                 </p>
+                <p className="text-xs text-gray-500">{commuter.email ?? 'No email on file'}</p>
                 <div className="mt-1 flex flex-wrap items-center gap-1.5">
                   <span
                     className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${

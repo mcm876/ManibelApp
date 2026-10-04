@@ -328,7 +328,7 @@ class _InAppCameraScreenState extends State<_InAppCameraScreen> {
             icon: Icons.camera_alt_outlined,
             title: 'Camera access needed',
             message:
-                'ManibelaApp needs camera access to capture this photo. '
+                'ManibelApp needs camera access to capture this photo. '
                 'Enable it in your phone\'s Settings, then try again.',
             primaryLabel: 'Try Again',
             onPrimary: _setUp,

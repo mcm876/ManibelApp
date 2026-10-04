@@ -1,4 +1,4 @@
-# ManibelaApp — Command Reference
+# ManibelApp — Command Reference
 
 All backend commands are run from the `backend/` folder. Admin website
 commands are run from the `admin/` folder. All Flutter commands are run

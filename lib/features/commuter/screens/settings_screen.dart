@@ -11,6 +11,7 @@ import '../../../core/utils/platform_utils.dart';
 import '../../../core/widgets/legal_document_dialog.dart';
 import '../../auth/screens/phone_change_otp_screen.dart';
 import '../../auth/screens/role_selection_screen.dart';
+import 'change_email_screen.dart';
 import 'change_password_screen.dart';
 
 /// Value returned by [SettingsScreen] via `Navigator.pop` when the user
@@ -121,6 +122,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // Re-evaluate whether Save should be enabled as the user types.
     _fullNameController.addListener(_onFieldChanged);
     _mobileNumberController.addListener(_onFieldChanged);
+
+    _loadEmail();
   }
 
   @override
@@ -256,6 +259,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // tapped, so backing out of this screen leaves the stored photo
     // untouched.
     setState(() => _photoPath = picked.path);
+  }
+
+  Future<void> _handleChangeEmail() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const ChangeEmailScreen()),
+    );
+    if (mounted) setState(() {});
+  }
+
+  /// Older sessions have no email cached — fetch the saved one so the
+  /// Email row below shows what the admin sees.
+  Future<void> _loadEmail() async {
+    try {
+      final json = await ApiClient.get(
+        '/api/commuter/me',
+        token: UserSession.instance.authToken,
+      );
+      final commuter = json['commuter'] as Map<String, dynamic>;
+      await UserSession.instance.updateEmail(commuter['email'] as String?);
+      if (mounted) setState(() {});
+    } on ApiException {
+      // Keep whatever is cached; the row just shows that.
+    }
   }
 
   void _handleChangePassword() {
@@ -494,11 +520,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     const SizedBox(height: 12),
                     _ReadOnlyField(
+                      label: 'Email',
+                      value: UserSession.instance.email ?? 'Not set',
+                    ),
+                    const SizedBox(height: 12),
+                    _ReadOnlyField(
                       label: 'Date of Birth',
                       value: _dateOfBirthLabel,
                     ),
                     const SizedBox(height: 24),
                     const _SectionTitle(title: 'Security'),
+                    const SizedBox(height: 12),
+                    _SecurityItem(
+                      icon: Icons.email_outlined,
+                      label: 'Change Email',
+                      onTap: _handleChangeEmail,
+                    ),
                     const SizedBox(height: 12),
                     _SecurityItem(
                       icon: Icons.lock_outline_rounded,

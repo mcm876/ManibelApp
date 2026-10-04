@@ -1,4 +1,4 @@
-# ManibelaApp Database Schema
+# ManibelApp Database Schema
 
 PostgreSQL, managed with Prisma. Source of truth is
 [`prisma/schema.prisma`](prisma/schema.prisma) — this file is a readable
@@ -41,6 +41,7 @@ Rider account. Logs in with `mobileNumber` (E.164 `+63XXXXXXXXXX`) + password.
 |---|---|---|
 | `commuterId` | String, unique | Display id, e.g. `CM-00001` |
 | `mobileNumber` | String, unique | |
+| `email` | String?, unique | Lowercase; required at sign-up, null for older accounts |
 | `passwordHash` | String | bcrypt |
 | `photoUrl` | String? | `/uploads/profile-photos/...` |
 | `phoneVerifiedAt` | DateTime? | Set once signup OTP is verified |
@@ -224,3 +225,13 @@ notes.
   `REJECTED`) to review a submitted photo (sets `licenseNumber` +
   `licenseVerificationStatus` together, requires `licenseFrontUrl` to
   exist). Easy to miss reading the route alone — check the request body.
+
+### EmergencyHotline
+
+Hotlines shown in the commuter app; managed from the admin website (`/api/admin/hotlines`), read by the app via `GET /api/commuter/hotlines`.
+
+| Field | Type | Notes |
+|---|---|---|
+| `name`, `number`, `description` | String | |
+| `category` | String | Icon hint: emergency, police, fire, medical, transport, other |
+| `active`, `sortOrder` | Boolean, Int | |

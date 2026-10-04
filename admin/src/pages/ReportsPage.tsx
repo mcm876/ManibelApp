@@ -391,7 +391,7 @@ export default function ReportsPage() {
       const rows: CsvRows = [];
 
       // --- Section 1: Summary --------------------------------------------
-      addTitleBlock(rows, 'MANIBELAAPP OPERATIONS REPORT', [periodLine, generatedLine]);
+      addTitleBlock(rows, 'MANIBELAPP OPERATIONS REPORT', [periodLine, generatedLine]);
       addSectionHeader(rows, 'Summary');
       const metricColumns: ColumnSpec[] = [
         { header: 'Metric', type: 'text' },
@@ -451,7 +451,7 @@ export default function ReportsPage() {
       ]);
 
       // --- Section 2: Daily Breakdown ------------------------------------
-      addTitleBlock(rows, 'MANIBELAAPP OPERATIONS REPORT', [periodLine, generatedLine, 'Daily Breakdown']);
+      addTitleBlock(rows, 'MANIBELAPP OPERATIONS REPORT', [periodLine, generatedLine, 'Daily Breakdown']);
       addTable(
         rows,
         [
@@ -476,7 +476,7 @@ export default function ReportsPage() {
       );
 
       // --- Section 3: By Driver ------------------------------------------
-      addTitleBlock(rows, 'MANIBELAAPP OPERATIONS REPORT', [periodLine, generatedLine, 'By Driver']);
+      addTitleBlock(rows, 'MANIBELAPP OPERATIONS REPORT', [periodLine, generatedLine, 'By Driver']);
       addTable(
         rows,
         [
@@ -546,7 +546,7 @@ export default function ReportsPage() {
             `/api/admin/export/drivers${dateParams ? `?${dateParams}` : ''}`,
           );
           const rows: CsvRows = [];
-          addTitleBlock(rows, 'MANIBELAAPP DRIVER REPORT', [
+          addTitleBlock(rows, 'MANIBELAPP DRIVER REPORT', [
             ...(exportRangeLabel ? [`Joined: ${exportRangeLabel}`] : []),
             generatedLine,
           ]);
@@ -601,7 +601,7 @@ export default function ReportsPage() {
             `/api/admin/export/commuters${dateParams ? `?${dateParams}` : ''}`,
           );
           const rows: CsvRows = [];
-          addTitleBlock(rows, 'MANIBELAAPP COMMUTER REPORT', [
+          addTitleBlock(rows, 'MANIBELAPP COMMUTER REPORT', [
             ...(exportRangeLabel ? [`Joined: ${exportRangeLabel}`] : []),
             generatedLine,
           ]);
@@ -656,7 +656,7 @@ export default function ReportsPage() {
             `/api/admin/export/trips?${rangedParams}`,
           );
           const rows: CsvRows = [];
-          addTitleBlock(rows, 'MANIBELAAPP TRIP REPORT', [periodLine, generatedLine]);
+          addTitleBlock(rows, 'MANIBELAPP TRIP REPORT', [periodLine, generatedLine]);
           addSectionHeader(rows, 'Summary');
           addTable(
             rows,
@@ -714,7 +714,7 @@ export default function ReportsPage() {
             `/api/admin/export/complaints?${rangedParams}`,
           );
           const rows: CsvRows = [];
-          addTitleBlock(rows, 'MANIBELAAPP INCIDENT REPORT', [periodLine, generatedLine]);
+          addTitleBlock(rows, 'MANIBELAPP INCIDENT REPORT', [periodLine, generatedLine]);
           addSectionHeader(rows, 'Summary');
           addTable(
             rows,

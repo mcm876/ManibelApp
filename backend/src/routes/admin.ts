@@ -1106,6 +1106,7 @@ router.get('/commuters/:id', requireAuth('admin'), async (req, res, next) => {
         commuterId: commuter.commuterId,
         fullName: commuter.fullName,
         mobileNumber: commuter.mobileNumber,
+        email: commuter.email,
         dateOfBirth: commuter.dateOfBirth ? formatDateOnly(commuter.dateOfBirth) : null,
         photoUrl: commuter.photoUrl,
         phoneVerified: commuter.phoneVerifiedAt != null,
@@ -1766,7 +1767,12 @@ router.get('/complaints', requireAuth('admin'), async (req, res, next) => {
           select: { id: true },
         }),
         prisma.commuter.findMany({
-          where: { fullName: { contains: query.search, mode: 'insensitive' } },
+          where: {
+            OR: [
+              { fullName: { contains: query.search, mode: 'insensitive' } },
+              { email: { contains: query.search, mode: 'insensitive' } },
+            ],
+          },
           select: { id: true },
         }),
       ]);
@@ -1807,6 +1813,7 @@ router.get('/complaints', requireAuth('admin'), async (req, res, next) => {
       complaints: complaints.map((c) => ({
         id: c.id,
         complainantName: commutersById.get(c.complainantId)?.fullName ?? 'Unknown commuter',
+        complainantEmail: commutersById.get(c.complainantId)?.email ?? null,
         driverName: driversById.get(c.driverId)?.fullName ?? 'Unknown driver',
         plateNumber: driversById.get(c.driverId)?.plateNumber ?? '—',
         complaintType: c.complaintType,
@@ -1843,6 +1850,7 @@ router.get('/complaints/:id', requireAuth('admin'), async (req, res, next) => {
         id: complaint.id,
         complainantName: commuter?.fullName ?? 'Unknown commuter',
         complainantMobileNumber: commuter?.mobileNumber ?? null,
+        complainantEmail: commuter?.email ?? null,
         driverName: driver?.fullName ?? 'Unknown driver',
         plateNumber: driver?.plateNumber ?? '—',
         complaintType: complaint.complaintType,
@@ -1880,6 +1888,162 @@ router.patch('/complaints/:id/status', requireAuth('admin'), async (req, res, ne
     });
 
     res.json({ complaint: { id: complaint.id, status: complaint.status } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// APP CONTENT — Government ID types and emergency hotlines. Both are plain
+// lists the commuter app fetches (GET /api/commuter/id-types and
+// /hotlines), so whatever an admin saves here shows up in the app without
+// a release. "Delete" removes the row outright; commuters who already
+// registered with a deleted ID type keep the label they picked.
+// ---------------------------------------------------------------------------
+
+const idTypeSchema = z.object({
+  label: z.string().trim().min(1).max(80),
+  hasExpiry: z.boolean(),
+  active: z.boolean().default(true),
+});
+
+router.get('/id-types', requireAuth('admin'), async (_req, res, next) => {
+  try {
+    const idTypes = await prisma.governmentIdType.findMany({
+      orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }],
+    });
+    res.json({ idTypes });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/id-types', requireAuth('admin'), async (req, res, next) => {
+  try {
+    const body = idTypeSchema.parse(req.body);
+    if (await prisma.governmentIdType.findUnique({ where: { label: body.label } })) {
+      res.status(409).json({ error: 'An ID type with that name already exists.' });
+      return;
+    }
+    const last = await prisma.governmentIdType.aggregate({ _max: { sortOrder: true } });
+    const idType = await prisma.governmentIdType.create({
+      data: { ...body, sortOrder: (last._max.sortOrder ?? -1) + 1 },
+    });
+    res.status(201).json({ idType });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch('/id-types/:id', requireAuth('admin'), async (req, res, next) => {
+  try {
+    const id: string = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const body = idTypeSchema.parse(req.body);
+    const existing = await prisma.governmentIdType.findUnique({ where: { id } });
+    if (!existing) {
+      res.status(404).json({ error: 'ID type not found.' });
+      return;
+    }
+    if (body.label !== existing.label) {
+      const clash = await prisma.governmentIdType.findUnique({ where: { label: body.label } });
+      if (clash) {
+        res.status(409).json({ error: 'An ID type with that name already exists.' });
+        return;
+      }
+    }
+    // Commuter.idType stores the label, so a rename has to carry over to
+    // accounts that already picked it.
+    const idType = await prisma.$transaction(async (tx) => {
+      const updated = await tx.governmentIdType.update({ where: { id }, data: body });
+      if (body.label !== existing.label) {
+        await tx.commuter.updateMany({ where: { idType: existing.label }, data: { idType: body.label } });
+        await tx.pendingCommuterSignup.updateMany({ where: { idType: existing.label }, data: { idType: body.label } });
+      }
+      return updated;
+    });
+    res.json({ idType });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete('/id-types/:id', requireAuth('admin'), async (req, res, next) => {
+  try {
+    const id: string = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const result = await prisma.governmentIdType.deleteMany({ where: { id } });
+    if (result.count === 0) {
+      res.status(404).json({ error: 'ID type not found.' });
+      return;
+    }
+    res.json({ message: 'ID type deleted.' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const HOTLINE_CATEGORIES = ['emergency', 'police', 'fire', 'medical', 'transport', 'other'] as const;
+
+const hotlineSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  number: z
+    .string()
+    .trim()
+    .min(1)
+    .max(30)
+    .regex(/^[0-9+()\-\s#*]+$/, 'A hotline number can only contain digits, spaces and + ( ) - # *'),
+  description: z.string().trim().max(200).default(''),
+  category: z.enum(HOTLINE_CATEGORIES).default('other'),
+  active: z.boolean().default(true),
+});
+
+router.get('/hotlines', requireAuth('admin'), async (_req, res, next) => {
+  try {
+    const hotlines = await prisma.emergencyHotline.findMany({
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    });
+    res.json({ hotlines });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/hotlines', requireAuth('admin'), async (req, res, next) => {
+  try {
+    const body = hotlineSchema.parse(req.body);
+    const last = await prisma.emergencyHotline.aggregate({ _max: { sortOrder: true } });
+    const hotline = await prisma.emergencyHotline.create({
+      data: { ...body, sortOrder: (last._max.sortOrder ?? -1) + 1 },
+    });
+    res.status(201).json({ hotline });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch('/hotlines/:id', requireAuth('admin'), async (req, res, next) => {
+  try {
+    const id: string = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const body = hotlineSchema.parse(req.body);
+    const result = await prisma.emergencyHotline.updateMany({ where: { id }, data: body });
+    if (result.count === 0) {
+      res.status(404).json({ error: 'Hotline not found.' });
+      return;
+    }
+    res.json({ hotline: await prisma.emergencyHotline.findUnique({ where: { id } }) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete('/hotlines/:id', requireAuth('admin'), async (req, res, next) => {
+  try {
+    const id: string = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const result = await prisma.emergencyHotline.deleteMany({ where: { id } });
+    if (result.count === 0) {
+      res.status(404).json({ error: 'Hotline not found.' });
+      return;
+    }
+    res.json({ message: 'Hotline deleted.' });
   } catch (err) {
     next(err);
   }

@@ -130,6 +130,7 @@ class _CommuterLoginScreenState extends State<CommuterLoginScreen> {
         authToken: response['token'] as String,
         commuterId: commuter['commuterId'] as String,
         fullName: commuter['fullName'] as String,
+        email: commuter['email'] as String?,
         dateOfBirth: DateOnly.tryParse(dobRaw),
         photoUrl: commuter['photoUrl'] as String?,
         password: passwordController.text,
@@ -280,7 +281,7 @@ class _CommuterLoginScreenState extends State<CommuterLoginScreen> {
                   ),
                   children: [
                     TextSpan(
-                      text: 'Manibela',
+                      text: 'Manibel',
                       style: TextStyle(color: AppColors.logoBlue),
                     ),
                     TextSpan(

@@ -16,7 +16,7 @@
     <uses-permission android:name="android.permission.CAMERA"/>
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <application
-        android:label="ManibelaApp"
+        android:label="ManibelApp"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

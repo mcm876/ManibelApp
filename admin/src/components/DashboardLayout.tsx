@@ -75,6 +75,17 @@ function GearIcon() {
   );
 }
 
+function ListIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M9 6h11M9 12h11M9 18h11" strokeLinecap="round" />
+      <circle cx="4.5" cy="6" r="1" />
+      <circle cx="4.5" cy="12" r="1" />
+      <circle cx="4.5" cy="18" r="1" />
+    </svg>
+  );
+}
+
 function LogoutIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
@@ -175,6 +186,7 @@ const navItems = [
   { to: '/id-verification', label: 'ID Verification', icon: BadgeCheckIcon, end: false, groupStart: false },
   { to: '/incident-reports', label: 'Incident Reports', icon: AlertIcon, end: false, groupStart: false },
   { to: '/reports', label: 'Reports', icon: ReportIcon, end: false, groupStart: true },
+  { to: '/app-content', label: 'IDs & Hotlines', icon: ListIcon, end: false, groupStart: false },
   { to: '/settings', label: 'Settings', icon: GearIcon, end: false, groupStart: false },
 ];
 
@@ -396,7 +408,7 @@ export function DashboardLayout({ children, title }: { children: ReactNode; titl
           <MenuIcon />
         </button>
         <LogoMark size={28} />
-        <span className="relative font-display text-sm font-bold text-white">ManibelaApp Admin</span>
+        <span className="relative font-display text-sm font-bold text-white">ManibelApp Admin</span>
         <div className="relative ml-auto flex items-center gap-3">
           <AdminIdentity light />
           <NotificationBell

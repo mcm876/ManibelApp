@@ -1,5 +1,6 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import '../../../core/utils/email_utils.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/legal_text.dart';
 import '../../../core/services/api_client.dart';
@@ -31,6 +32,7 @@ class _CommuterSignUpScreenState extends State<CommuterSignUpScreen> {
 
   final TextEditingController _fullNameController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _confirmPasswordController = TextEditingController();
   final TextEditingController _dobController = TextEditingController();
@@ -86,6 +88,7 @@ class _CommuterSignUpScreenState extends State<CommuterSignUpScreen> {
   void dispose() {
     _fullNameController.dispose();
     _phoneController.dispose();
+    _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
     _dobController.dispose();
@@ -124,6 +127,17 @@ class _CommuterSignUpScreenState extends State<CommuterSignUpScreen> {
     }
     if (!_phoneRegExp.hasMatch(phone)) {
       return 'Enter a valid number, e.g. 9171234567';
+    }
+    return null;
+  }
+
+  String? _validateEmail(String? value) {
+    final email = value?.trim() ?? '';
+    if (email.isEmpty) {
+      return _hasAttemptedSubmit ? 'Please enter your email address' : null;
+    }
+    if (!EmailUtils.isValid(email)) {
+      return 'Enter a valid email, e.g. juan@example.com';
     }
     return null;
   }
@@ -247,8 +261,10 @@ class _CommuterSignUpScreenState extends State<CommuterSignUpScreen> {
       // that code is verified, on CommuterOtpVerificationScreen, so
       // abandoning the flow here never leaves a "registered" account
       // behind.
+      final email = EmailUtils.normalize(_emailController.text);
       await ApiClient.post('/api/commuter/send-signup-otp', {
         'mobileNumber': normalizedPhone,
+        'email': email,
       });
 
       if (!mounted) return;
@@ -263,6 +279,7 @@ class _CommuterSignUpScreenState extends State<CommuterSignUpScreen> {
           builder: (context) => CommuterOtpVerificationScreen(
             fullName: _fullNameController.text.trim(),
             mobileNumber: normalizedPhone,
+            email: email,
             password: _passwordController.text,
             dateOfBirth: _dateOfBirth!,
           ),
@@ -356,7 +373,7 @@ class _CommuterSignUpScreenState extends State<CommuterSignUpScreen> {
                       ),
                       children: [
                         TextSpan(
-                          text: 'Manibela',
+                          text: 'Manibel',
                           style: TextStyle(color: AppColors.logoBlue),
                         ),
                         TextSpan(
@@ -414,6 +431,21 @@ class _CommuterSignUpScreenState extends State<CommuterSignUpScreen> {
                     ),
                     decoration: _fieldDecoration(hintText: '', prefixText: '+63 '),
                     validator: _validatePhone,
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Email Input
+                  TextFormField(
+                    autovalidateMode: AutovalidateMode.onUserInteraction,
+                    controller: _emailController,
+                    keyboardType: TextInputType.emailAddress,
+                    autocorrect: false,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: Colors.black87,
+                    ),
+                    decoration: _fieldDecoration(hintText: 'Email Address'),
+                    validator: _validateEmail,
                   ),
                   const SizedBox(height: 16),
 

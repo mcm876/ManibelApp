@@ -24,6 +24,7 @@ interface ComplaintStats {
 interface ComplaintRow {
   id: string;
   complainantName: string;
+  complainantEmail: string | null;
   driverName: string;
   plateNumber: string;
   complaintType: string;
@@ -241,7 +242,7 @@ export default function IncidentReportsPage() {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search complainant, driver, or plate"
+              placeholder="Search complainant, email, driver, or plate"
               className="w-full text-sm text-gray-700 focus:outline-none"
             />
           </div>
@@ -256,10 +257,11 @@ export default function IncidentReportsPage() {
 
       {filteredComplaints.length > 0 && (
         <div className="mt-4 overflow-x-auto rounded-xl border border-border-subtle bg-surface-card shadow-[0_1px_2px_rgba(16,24,40,0.04)]">
-          <table className="w-full min-w-[840px] text-left text-sm">
+          <table className="w-full min-w-[960px] text-left text-sm">
             <thead className="bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
               <tr>
                 <th className="px-5 py-3">Complainant</th>
+                <th className="px-5 py-3">Email</th>
                 <th className="px-5 py-3">Driver</th>
                 <th className="px-5 py-3">Plate Number</th>
                 <th className="px-5 py-3">Type</th>
@@ -272,6 +274,7 @@ export default function IncidentReportsPage() {
               {filteredComplaints.map((c) => (
                 <tr key={c.id} className="transition hover:bg-gray-50">
                   <td className="px-5 py-3 font-medium text-gray-900">{c.complainantName}</td>
+                  <td className="px-5 py-3 text-gray-600">{c.complainantEmail ?? '—'}</td>
                   <td className="px-5 py-3 text-gray-600">{c.driverName}</td>
                   <td className="px-5 py-3 text-gray-600">{c.plateNumber}</td>
                   <td className="px-5 py-3 text-gray-600">{c.complaintType}</td>

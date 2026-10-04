@@ -62,14 +62,14 @@ export async function issueOtp(
     // the sender name is approved and sends actually start succeeding —
     // channel: 'email' (Resend, already fully working) is untouched.
     try {
-      await sendSms(identifier, `Your ManibelaApp verification code is ${code}. It expires in ${OTP_TTL_MINUTES} minutes.`);
+      await sendSms(identifier, `Your ManibelApp verification code is ${code}. It expires in ${OTP_TTL_MINUTES} minutes.`);
     } catch (err) {
       console.error(`[OTP] sendSms failed for ${identifier} (code still issued, see above):`, err);
     }
   } else {
     await sendEmail(
       identifier,
-      'Your ManibelaApp verification code',
+      'Your ManibelApp verification code',
       `<p>Your verification code is <strong>${code}</strong>. It expires in ${OTP_TTL_MINUTES} minutes.</p>`,
     );
   }

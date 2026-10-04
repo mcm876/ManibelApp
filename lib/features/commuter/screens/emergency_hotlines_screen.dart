@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../core/constants/app_colors.dart';
+import '../../../core/services/api_client.dart';
 
 class _Hotline {
   final String name;
@@ -16,48 +17,60 @@ class _Hotline {
     required this.icon,
     required this.color,
   });
+
+  /// [category] is only a hint the admin picks to choose the icon/colour.
+  factory _Hotline.fromJson(Map<String, dynamic> json) {
+    final (icon, color) = switch (json['category']) {
+      'emergency' => (Icons.emergency_rounded, const Color(0xFFE23F3F)),
+      'police' => (Icons.local_police_rounded, const Color(0xFF2E5FE5)),
+      'fire' => (Icons.local_fire_department_rounded, const Color(0xFFE5A800)),
+      'medical' => (Icons.medical_services_rounded, const Color(0xFF2E9E6D)),
+      'transport' => (Icons.directions_bus_rounded, AppColors.logoBlue),
+      _ => (Icons.phone_in_talk_rounded, const Color(0xFF6B7280)),
+    };
+    return _Hotline(
+      name: json['name'] as String,
+      number: json['number'] as String,
+      description: (json['description'] as String?) ?? '',
+      icon: icon,
+      color: color,
+    );
+  }
 }
 
-class EmergencyHotlinesScreen extends StatelessWidget {
+class EmergencyHotlinesScreen extends StatefulWidget {
   const EmergencyHotlinesScreen({super.key});
 
-  static const List<_Hotline> _hotlines = [
-    _Hotline(
-      name: 'National Emergency Hotline',
-      number: '911',
-      description: 'Police, fire, and medical emergencies',
-      icon: Icons.emergency_rounded,
-      color: Color(0xFFE23F3F),
-    ),
-    _Hotline(
-      name: 'Philippine National Police',
-      number: '117',
-      description: 'Report crimes or request police assistance',
-      icon: Icons.local_police_rounded,
-      color: Color(0xFF2E5FE5),
-    ),
-    _Hotline(
-      name: 'Bureau of Fire Protection',
-      number: '(02) 8426-0219',
-      description: 'Fire emergencies and rescue',
-      icon: Icons.local_fire_department_rounded,
-      color: Color(0xFFE5A800),
-    ),
-    _Hotline(
-      name: 'Red Cross Ambulance',
-      number: '143',
-      description: 'Medical emergencies and ambulance dispatch',
-      icon: Icons.medical_services_rounded,
-      color: Color(0xFF2E9E6D),
-    ),
-    _Hotline(
-      name: 'LTFRB Hotline',
-      number: '1342',
-      description: 'Report jeepney or driver violations',
-      icon: Icons.directions_bus_rounded,
-      color: AppColors.logoBlue,
-    ),
-  ];
+  @override
+  State<EmergencyHotlinesScreen> createState() => _EmergencyHotlinesScreenState();
+}
+
+class _EmergencyHotlinesScreenState extends State<EmergencyHotlinesScreen> {
+  // Fetched from the backend (managed by admins on the website) — never
+  // hardcoded here.
+  List<_Hotline>? _hotlines;
+  bool _loadFailed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loadFailed = false);
+    try {
+      final json = await ApiClient.get('/api/commuter/hotlines');
+      final hotlines = (json['hotlines'] as List)
+          .map((e) => _Hotline.fromJson(e as Map<String, dynamic>))
+          .toList();
+      if (!mounted) return;
+      setState(() => _hotlines = hotlines);
+    } on ApiException {
+      if (!mounted) return;
+      setState(() => _loadFailed = true);
+    }
+  }
 
   Future<void> _confirmAndCall(
     BuildContext context,
@@ -228,22 +241,53 @@ class EmergencyHotlinesScreen extends StatelessWidget {
 
             const SizedBox(height: 10),
 
-            ..._hotlines.map(
-              (hotline) {
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: _HotlineCard(
-                    hotline: hotline,
-                    onTap: () {
-                      _confirmAndCall(
-                        context,
-                        hotline,
-                      );
-                    },
+            if (_hotlines == null && !_loadFailed)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 40),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (_loadFailed)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                child: Column(
+                  children: [
+                    const Text(
+                      "Couldn't load the hotlines. Check your connection and try again.",
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 13, color: Colors.black54),
+                    ),
+                    const SizedBox(height: 8),
+                    TextButton(onPressed: _load, child: const Text('Retry')),
+                  ],
+                ),
+              )
+            else if (_hotlines!.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Center(
+                  child: Text(
+                    'No hotlines available right now.',
+                    style: TextStyle(fontSize: 13, color: Colors.black54),
                   ),
-                );
-              },
-            ),
+                ),
+              )
+            else
+              ..._hotlines!.map(
+                (hotline) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: _HotlineCard(
+                      hotline: hotline,
+                      onTap: () {
+                        _confirmAndCall(
+                          context,
+                          hotline,
+                        );
+                      },
+                    ),
+                  );
+                },
+              ),
                 ],
               ),
             ),

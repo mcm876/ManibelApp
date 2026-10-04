@@ -798,7 +798,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                       ),
                       children: [
                         TextSpan(
-                          text: 'Manibela',
+                          text: 'Manibel',
                           style: TextStyle(color: AppColors.logoBlue),
                         ),
                         TextSpan(

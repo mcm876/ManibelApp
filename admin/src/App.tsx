@@ -15,6 +15,7 @@ import PassengerLiveMapPage from './pages/PassengerLiveMapPage';
 import IncidentReportsPage from './pages/IncidentReportsPage';
 import ReportsPage from './pages/ReportsPage';
 import SettingsPage from './pages/SettingsPage';
+import AppContentPage from './pages/AppContentPage';
 
 export default function App() {
   return (
@@ -117,6 +118,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <ReportsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/app-content"
+            element={
+              <ProtectedRoute>
+                <AppContentPage />
               </ProtectedRoute>
             }
           />

@@ -307,7 +307,7 @@ class _DriverLoginScreenState extends State<DriverLoginScreen> {
                   ),
                   children: [
                     TextSpan(
-                      text: 'Manibela',
+                      text: 'Manibel',
                       style: TextStyle(color: AppColors.logoBlue),
                     ),
                     TextSpan(

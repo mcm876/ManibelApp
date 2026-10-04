@@ -14,7 +14,7 @@ class MapConfig {
   /// by keeping it secret.
   static const String _accessToken = String.fromEnvironment('MAPBOX_ACCESS_TOKEN');
 
-  /// ManibelaApp's own custom style — a warm neutral ground and one
+  /// ManibelApp's own custom style — a warm neutral ground and one
   /// consistent dark label color instead of Mapbox Streets' defaults,
   /// but plain white/grey roads deliberately, not brand-colored: the
   /// route line drawn on top of the map (see RoutePath) is meant to be

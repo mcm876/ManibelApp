@@ -294,7 +294,7 @@ class DriverActiveTrip {
               ? const ForegroundNotificationConfig(
                   notificationTitle: 'Trip in progress',
                   notificationText:
-                      'ManibelaApp is sharing your jeepney\'s live location.',
+                      'ManibelApp is sharing your jeepney\'s live location.',
                   notificationChannelName: 'Trip tracking',
                   enableWakeLock: true,
                   setOngoing: true,

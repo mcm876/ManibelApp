@@ -69,6 +69,13 @@ model Commuter {
   dateOfBirth     DateTime? @db.Date
   photoUrl        String?
 
+  /// Contact email, stored lowercase. Required at sign-up (see
+  /// verifySignupOtpSchema) and shown to admins on incident reports so
+  /// they can follow up; also where notification emails go (see
+  /// utils/notify.ts). Nullable only because accounts created before
+  /// this field existed have none — they can add one from Settings.
+  email           String?   @unique
+
   /// Set once the commuter verifies the OTP sent at signup. Null until
   /// then — nothing currently gates on this being set (the ID/KYC steps
   /// after it are still fully mocked), it's just a record that the
@@ -490,6 +497,10 @@ model PendingCommuterSignup {
   mobileNumber String
   passwordHash String
 
+  /// Lowercased contact email from the sign-up form — copied onto the
+  /// Commuter row at /signup. Nullable for tickets that predate it.
+  email        String?
+
   /// Collected on the sign-up form itself (not a later step) — copied
   /// onto the Commuter row once /signup redeems this ticket. Nullable
   /// only so tickets created before this field existed don't break; the
@@ -689,4 +700,19 @@ model GovernmentIdType {
   hasExpiry Boolean @default(true)
   active    Boolean @default(true)
   sortOrder Int     @default(0)
+}
+
+/// Emergency hotlines shown on the commuter app's Emergency Hotlines
+/// screen. Managed from the admin website (Content -> Emergency Hotlines);
+/// the app fetches them via GET /api/commuter/hotlines instead of
+/// hardcoding a list. [category] only picks the icon/colour the app
+/// draws (emergency, police, fire, medical, transport, other).
+model EmergencyHotline {
+  id          String  @id @default(cuid())
+  name        String
+  number      String
+  description String  @default("")
+  category    String  @default("other")
+  active      Boolean @default(true)
+  sortOrder   Int     @default(0)
 }

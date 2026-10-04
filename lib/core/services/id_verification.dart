@@ -65,7 +65,7 @@ class IdVerification {
         age--;
       }
       if (age < minAge) {
-        return 'The birthdate on this ID shows you are under $minAge. You must be $minAge or older to use ManibelaApp.';
+        return 'The birthdate on this ID shows you are under $minAge. You must be $minAge or older to use ManibelApp.';
       }
     }
 

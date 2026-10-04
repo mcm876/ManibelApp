@@ -29,7 +29,7 @@ const List<String> _kStarLabels = [
 ];
 
 /// Pulls the backend token out of a scanned driver QR, or null if the code
-/// isn't a ManibelaApp driver code at all (wrong prefix / empty token).
+/// isn't a ManibelApp driver code at all (wrong prefix / empty token).
 String? driverTokenFromQr(String rawValue) {
   final value = rawValue.trim();
   if (!value.startsWith(kDriverQrPrefix)) return null;
@@ -235,7 +235,7 @@ class _ScanDriverQrScreenState extends State<ScanDriverQrScreen> {
             _Stage.invalid => _buildProblem(
               icon: Icons.qr_code_2_rounded,
               title: 'Invalid QR Code',
-              message: "That's not a ManibelaApp driver QR code. Please scan the QR code shown by the driver.",
+              message: "That's not a ManibelApp driver QR code. Please scan the QR code shown by the driver.",
               onRetry: _scan,
               retryLabel: 'Scan Again',
             ),

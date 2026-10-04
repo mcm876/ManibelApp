@@ -31,6 +31,10 @@ class UserSession {
   DateTime? dateOfBirth;
   String? commuterId;
 
+  /// The commuter's registered email (lowercase). Null for accounts created
+  /// before email was required, until they add one in Settings.
+  String? email;
+
   /// Local filesystem path to a photo picked in SettingsScreen but not yet
   /// uploaded/saved — purely a staging value for that screen's own
   /// preview. [photoUrl] below is the actual profile picture everywhere
@@ -79,6 +83,7 @@ class UserSession {
   static const _kMobileNumber = 'session_mobileNumber';
   static const _kPassword = 'session_password';
   static const _kCommuterId = 'session_commuterId';
+  static const _kEmail = 'session_email';
   static const _kDateOfBirth = 'session_dateOfBirth';
   static const _kPhotoPath = 'session_photoPath';
   static const _kPhotoUrl = 'session_photoUrl';
@@ -99,6 +104,7 @@ class UserSession {
     fullName = prefs.getString(_kFullName);
     mobileNumber = prefs.getString(_kMobileNumber);
     commuterId = prefs.getString(_kCommuterId);
+    email = prefs.getString(_kEmail);
     photoPath = prefs.getString(_kPhotoPath);
     photoUrl = prefs.getString(_kPhotoUrl);
     dateOfBirth = DateOnly.tryParse(prefs.getString(_kDateOfBirth));
@@ -158,6 +164,11 @@ class UserSession {
     }
     if (password != null) await _secureStorage.write(key: _kPassword, value: password!);
     if (commuterId != null) await prefs.setString(_kCommuterId, commuterId!);
+    if (email != null) {
+      await prefs.setString(_kEmail, email!);
+    } else {
+      await prefs.remove(_kEmail);
+    }
     if (photoPath != null) {
       await prefs.setString(_kPhotoPath, photoPath!);
     } else {
@@ -213,6 +224,7 @@ class UserSession {
     required String authToken,
     required String commuterId,
     required String fullName,
+    String? email,
     DateTime? dateOfBirth,
     String? photoUrl,
     String? password,
@@ -222,6 +234,7 @@ class UserSession {
     this.authToken = authToken;
     this.commuterId = commuterId;
     this.fullName = fullName;
+    this.email = email;
     this.dateOfBirth = dateOfBirth;
     this.photoUrl = photoUrl;
     this.rememberMe = rememberMe;
@@ -283,6 +296,13 @@ class UserSession {
     await _persist();
   }
 
+  /// Called once `PATCH /api/commuter/me/email` (or GET /me) returns the
+  /// account's saved email.
+  Future<void> updateEmail(String? newEmail) async {
+    email = newEmail;
+    await _persist();
+  }
+
   /// Returns false if [currentPassword] doesn't match what's on file, so
   /// the caller can show an error instead of silently "succeeding".
   Future<bool> updatePassword({
@@ -309,6 +329,7 @@ class UserSession {
     dateOfBirth = null;
     password = null;
     commuterId = null;
+    email = null;
     photoPath = null;
     photoUrl = null;
     authToken = null;

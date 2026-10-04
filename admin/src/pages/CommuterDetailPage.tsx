@@ -13,6 +13,7 @@ interface CommuterDetail {
   commuterId: string;
   fullName: string;
   mobileNumber: string;
+  email: string | null;
   dateOfBirth: string | null;
   photoUrl: string | null;
   phoneVerified: boolean;
@@ -158,6 +159,7 @@ export default function CommuterDetailPage() {
                 <p className="text-sm text-gray-500">
                   {commuter.commuterId} · {formatPhone(commuter.mobileNumber)}
                 </p>
+                <p className="text-sm text-gray-500">{commuter.email ?? 'No email on file'}</p>
               </div>
             </div>
             <div className="flex items-center gap-3">

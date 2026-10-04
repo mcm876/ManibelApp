@@ -19,6 +19,7 @@ class CommuterOtpVerificationScreen extends StatefulWidget {
     super.key,
     required this.fullName,
     required this.mobileNumber,
+    required this.email,
     required this.password,
     required this.dateOfBirth,
   });
@@ -27,6 +28,9 @@ class CommuterOtpVerificationScreen extends StatefulWidget {
 
   /// Already normalized to `+63XXXXXXXXXX`.
   final String mobileNumber;
+
+  /// Normalized (lowercase) email entered on the sign-up form.
+  final String email;
 
   final String password;
 
@@ -99,6 +103,7 @@ class _CommuterOtpVerificationScreenState extends State<CommuterOtpVerificationS
       final response = await ApiClient.post('/api/commuter/verify-signup-otp', {
         'fullName': widget.fullName,
         'mobileNumber': widget.mobileNumber,
+        'email': widget.email,
         'password': widget.password,
         'dateOfBirth': DateOnly.format(widget.dateOfBirth),
         'code': _code,
@@ -143,6 +148,7 @@ class _CommuterOtpVerificationScreenState extends State<CommuterOtpVerificationS
     try {
       await ApiClient.post('/api/commuter/send-signup-otp', {
         'mobileNumber': widget.mobileNumber,
+        'email': widget.email,
       });
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

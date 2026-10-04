@@ -1,4 +1,4 @@
-# ManibelaApp — Future Work
+# ManibelApp — Future Work
 
 Ideas and planned features not yet built. Not a bug tracker — just a
 holding pen so they don't get lost between sessions.
@@ -9,7 +9,7 @@ holding pen so they don't get lost between sessions.
 failure instead of letting it throw (temporary, `channel: 'sms'` only —
 `channel: 'email'`/Resend is untouched and still throws normally).
 Needed because `SEMAPHORE_API_KEY` is configured on Render but every
-real send fails until the "ManibelaApp" sender name is approved
+real send fails until the "ManibelApp" sender name is approved
 (applied for 2026-08-30) — without the swallow, every sign-up/login OTP
 request 500s outright instead of just failing to deliver the text.
 Revert to a plain `await sendSms(...)` (no try/catch) the moment the

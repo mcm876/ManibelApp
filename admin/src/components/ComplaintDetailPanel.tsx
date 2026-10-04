@@ -7,6 +7,7 @@ interface ComplaintDetail {
   id: string;
   complainantName: string;
   complainantMobileNumber: string | null;
+  complainantEmail: string | null;
   driverName: string;
   plateNumber: string;
   complaintType: string;
@@ -110,6 +111,18 @@ export function ComplaintDetailPanel({
                 <div className="flex justify-between">
                   <dt className="text-gray-500">Mobile Number</dt>
                   <dd className="font-medium text-gray-900">{complaint.complainantMobileNumber ?? '—'}</dd>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <dt className="text-gray-500">Email</dt>
+                  <dd className="min-w-0 break-all text-right font-medium text-gray-900">
+                    {complaint.complainantEmail ? (
+                      <a href={`mailto:${complaint.complainantEmail}`} className="text-brand-blue hover:underline">
+                        {complaint.complainantEmail}
+                      </a>
+                    ) : (
+                      '—'
+                    )}
+                  </dd>
                 </div>
               </dl>
             </div>

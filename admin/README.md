@@ -1,6 +1,6 @@
-# ManibelaApp Admin
+# ManibelApp Admin
 
-The admin website for [ManibelaApp](../README.md) — verifies commuter IDs,
+The admin website for [ManibelApp](../README.md) — verifies commuter IDs,
 manages driver accounts, reviews flagged trips and complaints, and
 monitors live jeepney/passenger activity on the Pasig–Quiapo route.
 

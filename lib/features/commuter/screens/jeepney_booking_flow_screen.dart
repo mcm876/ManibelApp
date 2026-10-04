@@ -902,7 +902,7 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
 
     if (!rawValue.startsWith(kDriverQrPrefix)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("That's not a ManibelaApp driver QR code.")),
+        const SnackBar(content: Text("That's not a ManibelApp driver QR code.")),
       );
       return;
     }

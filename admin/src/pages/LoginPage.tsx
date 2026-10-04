@@ -274,7 +274,7 @@ export default function LoginPage() {
         </div>
 
         <p className="relative pb-6 text-center text-xs text-gray-400">
-          &copy; 2026 ManibelaApp
+          &copy; 2026 ManibelApp
         </p>
       </div>
     </div>

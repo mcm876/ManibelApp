@@ -1,6 +1,6 @@
-# ManibelaApp Data Dictionary
+# ManibelApp Data Dictionary
 
-Field-by-field reference for every table in the ManibelaApp database
+Field-by-field reference for every table in the ManibelApp database
 (PostgreSQL via Prisma). Companion to [`DATABASE_SCHEMA.md`](DATABASE_SCHEMA.md),
 which explains the *why* behind the design — this file is the exhaustive
 *what*: every column, its type, its constraints, and a one-line

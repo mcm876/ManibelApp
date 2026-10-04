@@ -20,6 +20,7 @@ import {
 } from '../middleware/upload';
 import { normalizePlateNumber } from '../utils/plate';
 import { toTitleCase } from '../utils/text';
+import { normalizeEmail, INVALID_EMAIL_MESSAGE } from '../utils/emailAddress';
 import { notifyDriver, notifyCommuter, notifyAdmin } from '../utils/notify';
 import { authLimiter } from '../middleware/rateLimit';
 import { compareFaces, fetchImageBuffer } from '../lib/faceMatch';
@@ -89,6 +90,7 @@ function toPublicCommuter(commuter: {
   commuterId: string;
   fullName: string;
   mobileNumber: string;
+  email: string | null;
   dateOfBirth: Date | null;
   photoUrl: string | null;
   phoneVerifiedAt: Date | null;
@@ -98,6 +100,7 @@ function toPublicCommuter(commuter: {
     commuterId: commuter.commuterId,
     fullName: commuter.fullName,
     mobileNumber: commuter.mobileNumber,
+    email: commuter.email,
     dateOfBirth: commuter.dateOfBirth ? formatDateOnly(commuter.dateOfBirth) : null,
     photoUrl: commuter.photoUrl,
     phoneVerified: commuter.phoneVerifiedAt != null,
@@ -123,12 +126,27 @@ function toPublicCommuter(commuter: {
 // Abandoning the flow at any point before step 3 leaves nothing behind —
 // the phone number stays available and no password ever gets stored.
 
-const sendSignupOtpSchema = z.object({ mobileNumber: z.string().trim().min(1) });
+const sendSignupOtpSchema = z.object({
+  mobileNumber: z.string().trim().min(1),
+  email: z.string().optional(),
+});
 
 router.post('/send-signup-otp', async (req, res, next) => {
   try {
     const body = sendSignupOtpSchema.parse(req.body);
     const mobileNumber = toE164(body.mobileNumber);
+
+    // Email is required for a new account — checked here too (not just at
+    // verify-signup-otp) so a bad or taken address fails before an SMS is sent.
+    const email = normalizeEmail(body.email);
+    if (!email) {
+      res.status(400).json({ error: INVALID_EMAIL_MESSAGE });
+      return;
+    }
+    if (await prisma.commuter.findUnique({ where: { email } })) {
+      res.status(409).json({ error: 'This email is already registered to another account.' });
+      return;
+    }
 
     const existing = await prisma.commuter.findUnique({ where: { mobileNumber } });
     if (existing) {
@@ -154,6 +172,7 @@ async function generateSignupTicket(): Promise<string> {
 const verifySignupOtpSchema = z.object({
   fullName: z.string().trim().min(1).transform(toTitleCase),
   mobileNumber: z.string().trim().min(1),
+  email: z.string(),
   password: z.string().min(8),
   // .refine() here, not just CommuterSignUpScreen's own client-side
   // check, so a direct API call can't create an under-18 account by
@@ -169,9 +188,19 @@ router.post('/verify-signup-otp', async (req, res, next) => {
     const body = verifySignupOtpSchema.parse(req.body);
     const mobileNumber = toE164(body.mobileNumber);
 
+    const email = normalizeEmail(body.email);
+    if (!email) {
+      res.status(400).json({ error: INVALID_EMAIL_MESSAGE });
+      return;
+    }
+
     const existing = await prisma.commuter.findUnique({ where: { mobileNumber } });
     if (existing) {
       res.status(409).json({ error: 'This number is already registered.' });
+      return;
+    }
+    if (await prisma.commuter.findUnique({ where: { email } })) {
+      res.status(409).json({ error: 'This email is already registered to another account.' });
       return;
     }
 
@@ -187,6 +216,7 @@ router.post('/verify-signup-otp', async (req, res, next) => {
         ticket: await generateSignupTicket(),
         fullName: body.fullName,
         mobileNumber,
+        email,
         passwordHash,
         dateOfBirth: body.dateOfBirth,
         expiresAt: new Date(Date.now() + PENDING_SIGNUP_TTL_MINUTES * 60_000),
@@ -356,6 +386,10 @@ router.post('/signup', async (req, res, next) => {
       res.status(409).json({ error: 'This number is already registered.' });
       return;
     }
+    if (pending.email && (await prisma.commuter.findUnique({ where: { email: pending.email } }))) {
+      res.status(409).json({ error: 'This email is already registered to another account.' });
+      return;
+    }
 
     // Compares the selfie against the ID's own photo — local, no vendor
     // API. Never throws: compareFaces already degrades to null on any
@@ -397,6 +431,7 @@ router.post('/signup', async (req, res, next) => {
         commuterId: await generateCommuterId(),
         fullName: pending.fullName,
         mobileNumber: pending.mobileNumber,
+        email: pending.email,
         passwordHash: pending.passwordHash,
         dateOfBirth: pending.dateOfBirth,
         phoneVerifiedAt: new Date(),
@@ -936,6 +971,66 @@ router.patch('/me/password', requireAuth('commuter'), async (req, res, next) => 
   }
 });
 
+const changeEmailSchema = z.object({
+  currentPassword: z.string().min(1),
+  newEmail: z.string(),
+});
+
+// Same password re-check as PATCH /me/password. The address is validated
+// and must not belong to another account; it's saved lowercase.
+router.patch('/me/email', requireAuth('commuter'), async (req, res, next) => {
+  try {
+    const body = changeEmailSchema.parse(req.body);
+
+    const commuter = await prisma.commuter.findUnique({ where: { id: req.auth!.sub } });
+    if (!commuter) {
+      res.status(404).json({ error: 'Account not found.' });
+      return;
+    }
+
+    const valid = await bcrypt.compare(body.currentPassword, commuter.passwordHash);
+    if (!valid) {
+      res.status(400).json({ error: 'Current password is incorrect.' });
+      return;
+    }
+
+    const email = normalizeEmail(body.newEmail);
+    if (!email) {
+      res.status(400).json({ error: INVALID_EMAIL_MESSAGE });
+      return;
+    }
+    if (email === commuter.email) {
+      res.status(400).json({ error: 'That is already your email address.' });
+      return;
+    }
+    const taken = await prisma.commuter.findUnique({ where: { email } });
+    if (taken && taken.id !== commuter.id) {
+      res.status(409).json({ error: 'This email is already registered to another account.' });
+      return;
+    }
+
+    const updated = await prisma.commuter.update({ where: { id: commuter.id }, data: { email } });
+    res.json({ commuter: toPublicCommuter(updated), message: 'Email updated.' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// The emergency hotlines the app shows — public like /id-types, so the
+// list is whatever the admin last saved, never baked into the app.
+router.get('/hotlines', async (_req, res, next) => {
+  try {
+    const hotlines = await prisma.emergencyHotline.findMany({
+      where: { active: true },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+      select: { id: true, name: true, number: true, description: true, category: true },
+    });
+    res.json({ hotlines });
+  } catch (err) {
+    next(err);
+  }
+});
+
 const deleteAccountSchema = z.object({
   password: z.string().min(1),
 });
@@ -1361,7 +1456,7 @@ router.post('/alight', requireAuth('commuter'), async (req, res, next) => {
       await notifyCommuter({
         recipientId: req.auth!.sub,
         title: 'Trip Completed',
-        message: 'Your trip has ended. Thanks for riding with ManibelaApp!',
+        message: 'Your trip has ended. Thanks for riding with ManibelApp!',
         type: 'TRIP_COMPLETED',
         referenceId: openBoardings[0]?.tripId,
       });
