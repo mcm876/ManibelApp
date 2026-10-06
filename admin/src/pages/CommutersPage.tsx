@@ -298,6 +298,10 @@ export default function CommutersPage() {
         <CommuterDetailPanel
           commuterId={selectedCommuterId}
           onClose={() => setSelectedCommuterId(null)}
+          onDeleted={() => {
+            setSelectedCommuterId(null);
+            fetchCommuters();
+          }}
           onStatusChange={(isActive) =>
             setData((prev) =>
               prev

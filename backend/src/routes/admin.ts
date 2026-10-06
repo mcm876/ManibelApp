@@ -1239,6 +1239,74 @@ router.post('/commuters/:id/verify', requireAuth('admin'), async (req, res, next
 // DRIVER STATS — for the Drivers list page.
 // ---------------------------------------------------------------------------
 
+// Permanent account deletion. The schema has no foreign keys (everything
+// links by plain string id), so nothing cascades — each delete below
+// removes the account's related rows by hand, in one transaction so a
+// failure part-way can't leave an orphaned half-deleted account. Unlike
+// deactivation this can't be undone; the admin UI asks for confirmation.
+router.delete('/drivers/:id', requireAuth('admin'), async (req, res, next) => {
+  try {
+    const id: string = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const driver = await prisma.driver.findUnique({ where: { id }, select: { id: true, mobileNumber: true } });
+    if (!driver) {
+      res.status(404).json({ error: 'Driver not found.' });
+      return;
+    }
+    const activeTrip = await prisma.trip.findFirst({ where: { driverId: id, status: 'ACTIVE' }, select: { id: true } });
+    if (activeTrip) {
+      res.status(409).json({ error: 'This driver has a trip in progress. Deactivate them, or wait for the trip to end, before deleting.' });
+      return;
+    }
+
+    const trips = await prisma.trip.findMany({ where: { driverId: id }, select: { id: true } });
+    const tripIds = trips.map((t) => t.id);
+    await prisma.$transaction([
+      prisma.tripBoarding.deleteMany({ where: { tripId: { in: tripIds } } }),
+      prisma.rating.deleteMany({ where: { OR: [{ driverId: id }, { tripId: { in: tripIds } }] } }),
+      prisma.complaint.deleteMany({ where: { OR: [{ driverId: id }, { tripId: { in: tripIds } }] } }),
+      prisma.trip.deleteMany({ where: { driverId: id } }),
+      prisma.driverDailyLog.deleteMany({ where: { driverId: id } }),
+      prisma.driverNotification.deleteMany({ where: { recipientId: id } }),
+      prisma.photoAccessLog.deleteMany({ where: { targetType: 'DRIVER', targetId: id } }),
+      prisma.otpCode.deleteMany({ where: { mobileNumber: driver.mobileNumber } }),
+      prisma.driver.delete({ where: { id } }),
+    ]);
+
+    res.json({ message: 'Driver deleted.' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete('/commuters/:id', requireAuth('admin'), async (req, res, next) => {
+  try {
+    const id: string = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const commuter = await prisma.commuter.findUnique({ where: { id }, select: { id: true, mobileNumber: true } });
+    if (!commuter) {
+      res.status(404).json({ error: 'Commuter not found.' });
+      return;
+    }
+
+    // Trips belong to drivers, so they stay — only this commuter's own
+    // boardings, ratings, complaints and signals go.
+    await prisma.$transaction([
+      prisma.tripBoarding.deleteMany({ where: { commuterId: id } }),
+      prisma.rating.deleteMany({ where: { commuterId: id } }),
+      prisma.complaint.deleteMany({ where: { complainantId: id } }),
+      prisma.demandSignal.deleteMany({ where: { commuterId: id } }),
+      prisma.commuterNotification.deleteMany({ where: { recipientId: id } }),
+      prisma.photoAccessLog.deleteMany({ where: { targetType: 'COMMUTER', targetId: id } }),
+      prisma.otpCode.deleteMany({ where: { mobileNumber: commuter.mobileNumber } }),
+      prisma.pendingCommuterSignup.deleteMany({ where: { mobileNumber: commuter.mobileNumber } }),
+      prisma.commuter.delete({ where: { id } }),
+    ]);
+
+    res.json({ message: 'Commuter deleted.' });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/driver-stats', requireAuth('admin'), async (_req, res, next) => {
   try {
     const now = Date.now();

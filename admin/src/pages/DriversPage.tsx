@@ -487,6 +487,10 @@ export default function DriversPage() {
         <DriverDetailPanel
           driverId={selectedDriverId}
           onClose={() => setSelectedDriverId(null)}
+          onDeleted={() => {
+            setSelectedDriverId(null);
+            fetchDrivers();
+          }}
           onStatusChange={(isActive) =>
             setData((prev) =>
               prev

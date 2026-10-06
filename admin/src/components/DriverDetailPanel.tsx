@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
+import { ConfirmDialog } from './ConfirmDialog';
 import { apiClient, ApiError } from '../lib/apiClient';
 import { formatManilaDate } from '../lib/formatDate';
 import { formatPhone } from '../lib/formatPhone';
@@ -370,14 +371,17 @@ export function DriverDetailPanel({
   driverId,
   onClose,
   onStatusChange,
+  onDeleted,
 }: {
   driverId: string;
   onClose: () => void;
   onStatusChange: (isActive: boolean) => void;
+  onDeleted: () => void;
 }) {
   const [driver, setDriver] = useState<DriverDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [licenseNumberInput, setLicenseNumberInput] = useState('');
   const [licenseActionError, setLicenseActionError] = useState<string | null>(null);
   const [isSubmittingLicense, setIsSubmittingLicense] = useState(false);
@@ -433,6 +437,20 @@ export function DriverDetailPanel({
   // explanation, or another admin reviewing a trip, should show up here
   // without having to close and reopen the panel.
   usePolling(fetchDriver, 8000);
+
+  async function handleDelete() {
+    if (!driver || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      await apiClient.delete(`/api/admin/drivers/${driver.id}`);
+      onDeleted();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Something went wrong.');
+      setConfirmingDelete(false);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
 
   async function handleToggleStatus() {
     if (!driver || isSubmitting) return;
@@ -628,9 +646,28 @@ export function DriverDetailPanel({
             >
               {isSubmitting ? 'Please wait...' : driver.isActive ? 'Deactivate Driver' : 'Reactivate Driver'}
             </button>
+            <button
+              onClick={() => setConfirmingDelete(true)}
+              disabled={isSubmitting}
+              className="w-full rounded-lg bg-brand-red py-2.5 text-sm font-semibold text-white transition hover:brightness-110 disabled:opacity-60"
+            >
+              Delete Driver
+            </button>
           </div>
         )}
       </div>
+      {confirmingDelete && driver && (
+        <ConfirmDialog
+          icon={<svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6" /></svg>}
+          tone="danger"
+          title="Delete this driver?"
+          message="This permanently deletes the account along with their trips, ratings, complaints and notifications. This cannot be undone."
+          confirmLabel="Delete"
+          isSubmitting={isSubmitting}
+          onConfirm={handleDelete}
+          onCancel={() => setConfirmingDelete(false)}
+        />
+      )}
     </div>
   );
 }
