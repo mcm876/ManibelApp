@@ -20,6 +20,7 @@ import {
   MIN_ADULT_AGE,
 } from '../utils/date';
 import { requireAuth, requireMainAdmin } from '../middleware/auth';
+import { uploadAdminLicensePhotos, uploadBufferToCloudinary, deleteUploadedPhoto } from '../middleware/upload';
 import { notifyDriver, notifyCommuter } from '../utils/notify';
 import { issueOtp, verifyOtp } from '../utils/otp';
 import { authLimiter } from '../middleware/rateLimit';
@@ -643,6 +644,10 @@ router.patch('/drivers/:id/license-number', requireAuth('admin'), async (req, re
       res.status(400).json({ error: 'This driver has not submitted a license photo yet.' });
       return;
     }
+    if (body.status === 'APPROVED' && !driver.licenseBackUrl) {
+      res.status(400).json({ error: 'Both the front and back of the license are needed before it can be verified.' });
+      return;
+    }
     if (body.status === 'APPROVED' && !body.licenseNumber) {
       res.status(400).json({ error: 'License number is required to approve.' });
       return;
@@ -671,6 +676,117 @@ router.patch('/drivers/:id/license-number', requireAuth('admin'), async (req, re
         id: updated.id,
         licenseNumber: updated.licenseNumber,
         licenseVerificationStatus: updated.licenseVerificationStatus,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Admin-side license upload/replace/delete. Drivers can only register
+// and log in through the mobile app, so this is how an admin attaches
+// license photos to an existing account without the driver doing it. Only
+// the front and back are needed — no selfie/face check. Photos go to
+// Cloudinary as `sensitive` (signed `authenticated` delivery, see
+// middleware/upload.ts), and the URLs only ever come back from the
+// admin-only GET /drivers/:id above, which also records who viewed them.
+// Any new image puts the license back to PENDING, since whatever was
+// verified before is no longer what's on file.
+router.post('/drivers/:id/license-photos', requireAuth('admin'), (req, res, next) => {
+  uploadAdminLicensePhotos(req, res, async (err) => {
+    if (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Upload failed.' });
+      return;
+    }
+
+    try {
+      const id: string = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      const files = req.files as { licenseFront?: Express.Multer.File[]; licenseBack?: Express.Multer.File[] } | undefined;
+      const front = files?.licenseFront?.[0];
+      const back = files?.licenseBack?.[0];
+      if (!front && !back) {
+        res.status(400).json({ error: 'Choose the front and/or back photo of the license to upload.' });
+        return;
+      }
+
+      const existing = await prisma.driver.findUnique({ where: { id } });
+      if (!existing) {
+        res.status(404).json({ error: 'Driver not found.' });
+        return;
+      }
+      if (!existing.licenseFrontUrl && !front) {
+        res.status(400).json({ error: 'Upload the front of the license first (or together with the back).' });
+        return;
+      }
+
+      const [licenseFrontUrl, licenseBackUrl] = await Promise.all([
+        front ? uploadBufferToCloudinary(front.buffer, 'license-photos', { sensitive: true }) : Promise.resolve(existing.licenseFrontUrl),
+        back ? uploadBufferToCloudinary(back.buffer, 'license-photos', { sensitive: true }) : Promise.resolve(existing.licenseBackUrl),
+      ]);
+
+      const updated = await prisma.driver.update({
+        where: { id },
+        data: {
+          licenseFrontUrl,
+          licenseBackUrl,
+          licenseVerificationStatus: 'PENDING',
+          // A new front photo makes any earlier selfie comparison meaningless.
+          ...(front ? { faceMatchScore: null } : {}),
+        },
+      });
+
+      if (front) deleteUploadedPhoto(existing.licenseFrontUrl);
+      if (back) deleteUploadedPhoto(existing.licenseBackUrl);
+
+      res.json({
+        driver: {
+          id: updated.id,
+          licenseFrontUrl: updated.licenseFrontUrl,
+          licenseBackUrl: updated.licenseBackUrl,
+          faceMatchScore: updated.faceMatchScore,
+          licenseVerificationStatus: updated.licenseVerificationStatus,
+        },
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+});
+
+// Removes the license photos (and, since it only exists to check them, the
+// driver's verification selfie) and clears the review status. The license
+// number is a separate typed record, so it stays. Without an APPROVED
+// status the driver can't start trips until a license is on file again.
+router.delete('/drivers/:id/license-photos', requireAuth('admin'), async (req, res, next) => {
+  try {
+    const id: string = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const existing = await prisma.driver.findUnique({ where: { id } });
+    if (!existing) {
+      res.status(404).json({ error: 'Driver not found.' });
+      return;
+    }
+    if (!existing.licenseFrontUrl && !existing.licenseBackUrl && !existing.selfieUrl) {
+      res.status(400).json({ error: 'This driver has no license photos on file.' });
+      return;
+    }
+
+    const updated = await prisma.driver.update({
+      where: { id },
+      data: { licenseFrontUrl: null, licenseBackUrl: null, selfieUrl: null, faceMatchScore: null, licenseVerificationStatus: null },
+    });
+
+    deleteUploadedPhoto(existing.licenseFrontUrl);
+    deleteUploadedPhoto(existing.licenseBackUrl);
+    deleteUploadedPhoto(existing.selfieUrl);
+
+    res.json({
+      driver: {
+        id: updated.id,
+        licenseFrontUrl: null,
+        licenseBackUrl: null,
+        selfieUrl: null,
+        faceMatchScore: null,
+        licenseVerificationStatus: null,
       },
     });
   } catch (err) {

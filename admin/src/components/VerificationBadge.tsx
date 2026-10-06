@@ -27,7 +27,15 @@ function CrossIcon() {
 
 /** Status is never color-alone here — every badge pairs an icon with a
  * label, per the dataviz skill's status-palette rule. */
-export function VerificationBadge({ status, notSubmitted }: { status: VerificationStatus; notSubmitted?: boolean }) {
+export function VerificationBadge({
+  status,
+  notSubmitted,
+  approvedLabel = 'Approved',
+}: {
+  status: VerificationStatus;
+  notSubmitted?: boolean;
+  approvedLabel?: string;
+}) {
   if (notSubmitted || !status) {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 text-xs font-semibold text-gray-500">
@@ -38,7 +46,7 @@ export function VerificationBadge({ status, notSubmitted }: { status: Verificati
 
   const config = {
     PENDING: { icon: <ClockIcon />, label: 'Pending', bg: 'bg-status-warning-bg', text: 'text-status-warning' },
-    APPROVED: { icon: <CheckIcon />, label: 'Approved', bg: 'bg-status-good-bg', text: 'text-status-good' },
+    APPROVED: { icon: <CheckIcon />, label: approvedLabel, bg: 'bg-status-good-bg', text: 'text-status-good' },
     REJECTED: { icon: <CrossIcon />, label: 'Rejected', bg: 'bg-status-critical-bg', text: 'text-status-critical' },
   }[status];
 

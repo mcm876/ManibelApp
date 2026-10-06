@@ -53,10 +53,8 @@ function EditIcon() {
   );
 }
 
-/** Read-only license photo — uploading is the driver's own job now
- * (Settings -> License Number, see POST /driver/me/license-photo); an
- * admin only ever reviews what was submitted, same as CommuterDetailPanel's
- * PhotoTile for a commuter's KYC docs. */
+/** One side of the license. Click opens the full-size image in a new tab
+ * so small print (number, expiry) can be read properly. */
 function LicensePhotoView({ label, url }: { label: string; url: string | null }) {
   const resolved = apiClient.resolveUrl(url);
   return (
@@ -64,11 +62,112 @@ function LicensePhotoView({ label, url }: { label: string; url: string | null })
       <p className="mb-1.5 text-xs font-semibold text-gray-600">{label}</p>
       <div className="flex aspect-video items-center justify-center overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
         {resolved ? (
-          <img src={resolved} alt={label} className="h-full w-full object-contain" />
+          <a href={resolved} target="_blank" rel="noreferrer" title="Open full size" className="block h-full w-full">
+            <img src={resolved} alt={label} className="h-full w-full object-contain" />
+          </a>
         ) : (
-          <span className="text-xs text-gray-400">Not submitted</span>
+          <span className="text-xs text-gray-400">Not uploaded</span>
         )}
       </div>
+    </div>
+  );
+}
+
+const LICENSE_ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const LICENSE_MAX_BYTES = 5 * 1024 * 1024;
+
+/** Admin-side upload/replace of the license front and back. Either side
+ * can be sent alone to replace just that one. A fresh upload resets the
+ * status to Pending (server-side), so it has to be reviewed again. */
+function LicenseUploadControls({
+  driverId,
+  hasLicense,
+  onUploaded,
+  onDeleteClick,
+}: {
+  driverId: string;
+  hasLicense: boolean;
+  onUploaded: (change: Partial<DriverDetail>) => void;
+  onDeleteClick: () => void;
+}) {
+  const [front, setFront] = useState<File | null>(null);
+  const [back, setBack] = useState<File | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [inputKey, setInputKey] = useState(0);
+
+  function pick(side: 'front' | 'back', file: File | null) {
+    setError(null);
+    if (file && !LICENSE_ALLOWED_TYPES.includes(file.type)) {
+      setError('Only JPEG, PNG or WEBP images are allowed.');
+      return;
+    }
+    if (file && file.size > LICENSE_MAX_BYTES) {
+      setError('Each image must be 5 MB or smaller.');
+      return;
+    }
+    (side === 'front' ? setFront : setBack)(file);
+  }
+
+  async function handleUpload() {
+    if ((!front && !back) || isUploading) return;
+    setIsUploading(true);
+    setError(null);
+    try {
+      const files: Record<string, File> = {};
+      if (front) files.licenseFront = front;
+      if (back) files.licenseBack = back;
+      const res = await apiClient.uploadFiles<{ driver: Partial<DriverDetail> }>(
+        `/api/admin/drivers/${driverId}/license-photos`,
+        files,
+      );
+      onUploaded(res.driver);
+      setFront(null);
+      setBack(null);
+      setInputKey((k) => k + 1);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Upload failed.');
+    } finally {
+      setIsUploading(false);
+    }
+  }
+
+  const fileInputClass =
+    'block w-full text-xs text-gray-600 file:mr-2 file:rounded-lg file:border-0 file:bg-gray-100 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-gray-700 hover:file:bg-gray-200';
+
+  return (
+    <div className="mt-3 rounded-xl border border-border-subtle p-3">
+      <p className="text-xs font-semibold text-gray-600">{hasLicense ? 'Replace license photos' : 'Upload license photos'}</p>
+      <div className="mt-2 grid grid-cols-2 gap-3" key={inputKey}>
+        <label className="block text-xs text-gray-500">
+          Front
+          <input type="file" accept="image/jpeg,image/png,image/webp" className={fileInputClass} onChange={(e) => pick('front', e.target.files?.[0] ?? null)} />
+        </label>
+        <label className="block text-xs text-gray-500">
+          Back
+          <input type="file" accept="image/jpeg,image/png,image/webp" className={fileInputClass} onChange={(e) => pick('back', e.target.files?.[0] ?? null)} />
+        </label>
+      </div>
+      {error && <p className="mt-1.5 text-xs font-medium text-brand-red">{error}</p>}
+      <div className="mt-2.5 flex items-center justify-between gap-2">
+        <button
+          onClick={handleUpload}
+          disabled={isUploading || (!front && !back)}
+          className="rounded-lg bg-brand-blue px-3 py-1.5 text-xs font-semibold text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {isUploading ? 'Uploading...' : hasLicense ? 'Replace' : 'Upload'}
+        </button>
+        {hasLicense && (
+          <button
+            onClick={onDeleteClick}
+            disabled={isUploading}
+            className="rounded-lg border border-status-critical px-3 py-1.5 text-xs font-semibold text-status-critical hover:bg-status-critical-bg disabled:opacity-50"
+          >
+            Delete photos
+          </button>
+        )}
+      </div>
+      <p className="mt-1.5 text-[11px] text-gray-400">JPEG, PNG or WEBP, up to 5 MB each. A new upload sets the status back to Pending.</p>
     </div>
   );
 }
@@ -382,6 +481,7 @@ export function DriverDetailPanel({
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [confirmingLicenseDelete, setConfirmingLicenseDelete] = useState(false);
   const [licenseNumberInput, setLicenseNumberInput] = useState('');
   const [licenseActionError, setLicenseActionError] = useState<string | null>(null);
   const [isSubmittingLicense, setIsSubmittingLicense] = useState(false);
@@ -437,6 +537,20 @@ export function DriverDetailPanel({
   // explanation, or another admin reviewing a trip, should show up here
   // without having to close and reopen the panel.
   usePolling(fetchDriver, 8000);
+
+  async function handleDeleteLicense() {
+    if (!driver || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const res = await apiClient.delete<{ driver: Partial<DriverDetail> }>(`/api/admin/drivers/${driver.id}/license-photos`);
+      applyLocalChange(res.driver);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Something went wrong.');
+    } finally {
+      setIsSubmitting(false);
+      setConfirmingLicenseDelete(false);
+    }
+  }
 
   async function handleDelete() {
     if (!driver || isSubmitting) return;
@@ -589,14 +703,20 @@ export function DriverDetailPanel({
             <div>
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400">License Photos</h3>
-                <VerificationBadge status={driver.licenseVerificationStatus} notSubmitted={!driver.licenseFrontUrl} />
+                <VerificationBadge status={driver.licenseVerificationStatus} notSubmitted={!driver.licenseFrontUrl} approvedLabel="Verified" />
               </div>
-              {driver.licenseFrontUrl && <FaceMatchCard score={driver.faceMatchScore} documentLabel="License Front" />}
+              {driver.selfieUrl && <FaceMatchCard score={driver.faceMatchScore} documentLabel="License Front" />}
               <div className="mt-3 grid grid-cols-2 gap-3">
                 <LicensePhotoView label="License Front" url={driver.licenseFrontUrl} />
                 <LicensePhotoView label="License Back" url={driver.licenseBackUrl} />
-                <LicensePhotoView label="Selfie" url={driver.selfieUrl} />
+                {driver.selfieUrl && <LicensePhotoView label="Selfie (from driver app)" url={driver.selfieUrl} />}
               </div>
+              <LicenseUploadControls
+                driverId={driver.id}
+                hasLicense={Boolean(driver.licenseFrontUrl || driver.licenseBackUrl || driver.selfieUrl)}
+                onUploaded={applyLocalChange}
+                onDeleteClick={() => setConfirmingLicenseDelete(true)}
+              />
               <PhotoAccessLogNote entries={driver.photoAccessLog} />
 
               {driver.licenseFrontUrl && (
@@ -625,7 +745,7 @@ export function DriverDetailPanel({
                       disabled={isSubmittingLicense || driver.licenseVerificationStatus === 'APPROVED'}
                       className="rounded-lg bg-brand-blue px-2.5 py-1 text-xs font-semibold text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      Approve
+                      Verify
                     </button>
                   </div>
                   {licenseActionError && <p className="mt-1.5 text-xs font-medium text-brand-red">{licenseActionError}</p>}
@@ -656,6 +776,18 @@ export function DriverDetailPanel({
           </div>
         )}
       </div>
+      {confirmingLicenseDelete && driver && (
+        <ConfirmDialog
+          icon={<svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6" /></svg>}
+          tone="danger"
+          title="Delete license photos?"
+          message="This removes the license front and back (and any selfie) and clears the status. The driver won't be able to start trips until a license is verified again."
+          confirmLabel="Delete"
+          isSubmitting={isSubmitting}
+          onConfirm={handleDeleteLicense}
+          onCancel={() => setConfirmingLicenseDelete(false)}
+        />
+      )}
       {confirmingDelete && driver && (
         <ConfirmDialog
           icon={<svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6" /></svg>}

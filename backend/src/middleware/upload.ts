@@ -142,6 +142,18 @@ export const uploadLicensePhotos = multer({
   { name: 'selfie', maxCount: 1 },
 ]);
 
+/** Front/back of a driver's license uploaded by an admin on the driver's
+ * behalf (POST /admin/drivers/:id/license-photos) — no selfie. Each side
+ * is optional at the multer level so an admin can replace just one. */
+export const uploadAdminLicensePhotos = multer({
+  storage,
+  limits: IMAGE_LIMITS,
+  fileFilter: imageFileFilter,
+}).fields([
+  { name: 'licenseFront', maxCount: 1 },
+  { name: 'licenseBack', maxCount: 1 },
+]);
+
 /** Deletes a previously-uploaded photo from Cloudinary, keyed by its
  * stored secure_url — silently no-ops if it's missing or wasn't a
  * Cloudinary URL (e.g. null, or a pre-Cloudinary local /uploads/... path
