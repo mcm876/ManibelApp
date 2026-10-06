@@ -2,6 +2,7 @@ import 'dotenv/config';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../src/lib/prisma';
 import { generateQrToken } from '../src/utils/qrToken';
+import { generateDriverId } from '../src/utils/driverId';
 
 // Seeds demo accounts so there's something real to log into without
 // having to run create-driver.ts / create-commuter.ts by hand first.
@@ -10,23 +11,34 @@ import { generateQrToken } from '../src/utils/qrToken';
 // Drivers:   password Driver@123  (mobile numbers +63917123456x)
 // Commuters: password Commuter@123 (mobile numbers +63918123456x)
 
+// Same next-free-id logic as commuter.ts's own (unexported) generator.
+async function generateCommuterId(): Promise<string> {
+  let next = (await prisma.commuter.count()) + 1;
+  for (;;) {
+    const candidate = `CM-${next.toString().padStart(5, '0')}`;
+    const exists = await prisma.commuter.findUnique({ where: { commuterId: candidate } });
+    if (!exists) return candidate;
+    next++;
+  }
+}
+
 const DRIVER_PASSWORD = 'Driver@123';
 const COMMUTER_PASSWORD = 'Commuter@123';
 
 const drivers = [
-  { driverId: 'DR-00001', fullName: 'Juan Dela Cruz', mobileNumber: '+639171234567', plateNumber: 'NGP123', licenseNumber: 'N01-23-456781' },
-  { driverId: 'DR-00002', fullName: 'Pedro Santos', mobileNumber: '+639171234568', plateNumber: 'NGP234', licenseNumber: 'N02-24-567892' },
-  { driverId: 'DR-00003', fullName: 'Ramon Bautista', mobileNumber: '+639171234569', plateNumber: 'NGP345', licenseNumber: 'N03-25-678903' },
-  { driverId: 'DR-00004', fullName: 'Eduardo Villanueva', mobileNumber: '+639171234570', plateNumber: 'NGP456', licenseNumber: 'N04-22-789014' },
-  { driverId: 'DR-00005', fullName: 'Carlos Mendoza', mobileNumber: '+639171234571', plateNumber: 'NGP567', licenseNumber: 'N05-21-890125' },
+  { fullName: 'Juan Dela Cruz', mobileNumber: '+639171234567', plateNumber: 'NGP123', licenseNumber: 'N01-23-456781' },
+  { fullName: 'Pedro Santos', mobileNumber: '+639171234568', plateNumber: 'NGP234', licenseNumber: 'N02-24-567892' },
+  { fullName: 'Ramon Bautista', mobileNumber: '+639171234569', plateNumber: 'NGP345', licenseNumber: 'N03-25-678903' },
+  { fullName: 'Eduardo Villanueva', mobileNumber: '+639171234570', plateNumber: 'NGP456', licenseNumber: 'N04-22-789014' },
+  { fullName: 'Carlos Mendoza', mobileNumber: '+639171234571', plateNumber: 'NGP567', licenseNumber: 'N05-21-890125' },
 ];
 
 const commuters = [
-  { commuterId: 'CM-00001', fullName: 'Maria Clara Reyes', mobileNumber: '+639181234567', email: 'maria.reyes@example.com' },
-  { commuterId: 'CM-00002', fullName: 'Jose Manalo', mobileNumber: '+639181234568', email: 'jose.manalo@example.com' },
-  { commuterId: 'CM-00003', fullName: 'Angelica Torres', mobileNumber: '+639181234569', email: 'angelica.torres@example.com' },
-  { commuterId: 'CM-00004', fullName: 'Miguel Aquino', mobileNumber: '+639181234570', email: 'miguel.aquino@example.com' },
-  { commuterId: 'CM-00005', fullName: 'Katrina Domingo', mobileNumber: '+639181234571', email: 'katrina.domingo@example.com' },
+  { fullName: 'Maria Clara Reyes', mobileNumber: '+639181234567', email: 'maria.reyes@example.com' },
+  { fullName: 'Jose Manalo', mobileNumber: '+639181234568', email: 'jose.manalo@example.com' },
+  { fullName: 'Angelica Torres', mobileNumber: '+639181234569', email: 'angelica.torres@example.com' },
+  { fullName: 'Miguel Aquino', mobileNumber: '+639181234570', email: 'miguel.aquino@example.com' },
+  { fullName: 'Katrina Domingo', mobileNumber: '+639181234571', email: 'katrina.domingo@example.com' },
 ];
 
 async function main() {
@@ -40,7 +52,7 @@ async function main() {
       continue;
     }
     await prisma.driver.create({
-      data: { ...d, passwordHash: driverHash, qrToken: await generateQrToken(), licenseVerificationStatus: 'APPROVED' },
+      data: { ...d, driverId: await generateDriverId(), passwordHash: driverHash, qrToken: await generateQrToken(), licenseVerificationStatus: 'APPROVED' },
     });
     console.log(`Seeded driver ${d.fullName}: ${d.mobileNumber} / ${DRIVER_PASSWORD}`);
   }
@@ -52,7 +64,7 @@ async function main() {
       continue;
     }
     await prisma.commuter.create({
-      data: { ...c, passwordHash: commuterHash, phoneVerifiedAt: new Date(), verificationStatus: 'APPROVED', isActive: true },
+      data: { ...c, commuterId: await generateCommuterId(), passwordHash: commuterHash, phoneVerifiedAt: new Date(), verificationStatus: 'APPROVED', isActive: true },
     });
     console.log(`Seeded commuter ${c.fullName}: ${c.mobileNumber} / ${COMMUTER_PASSWORD}`);
   }
