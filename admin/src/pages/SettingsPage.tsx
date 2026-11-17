@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { DashboardLayout } from '../components/DashboardLayout';
 import { EyeIcon } from '../components/EyeIcon';
 import { Card, SectionHeader } from '../components/Card';
-import { useAuth, type AdminRole } from '../lib/auth';
+import { ROLE_LABELS, isAdminLevel, useAuth, type AdminRole } from '../lib/auth';
 import { apiClient, ApiError } from '../lib/apiClient';
 import { usePolling } from '../lib/usePolling';
 import { formatManilaDate, formatManilaDateTime } from '../lib/formatDate';
@@ -246,10 +246,16 @@ function RoleBadge({ role }: { role: AdminRole }) {
         isMain ? 'bg-brand-blue/10 text-brand-blue' : 'bg-gray-100 text-gray-600'
       }`}
     >
-      {isMain ? 'Main Admin' : 'Admin'}
+      {ROLE_LABELS[role]}
     </span>
   );
 }
+
+const ASSIGNABLE_ROLES: { value: Exclude<AdminRole, 'MAIN_ADMIN'>; label: string; help: string }[] = [
+  { value: 'ADMIN', label: 'Admin', help: 'Full access to the dashboard.' },
+  { value: 'OPERATOR', label: 'Operator', help: 'Manages only the drivers and jeepneys assigned to them.' },
+  { value: 'MANIBELA', label: 'MANIBELA', help: 'Association-level monitoring and review; mostly read-only.' },
+];
 
 function StatusBadge({ isActive }: { isActive: boolean }) {
   return (
@@ -270,6 +276,7 @@ function CreateAdminForm({ onCreated, onCancel }: { onCreated: () => void; onCan
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [role, setRole] = useState<Exclude<AdminRole, 'MAIN_ADMIN'>>('ADMIN');
   const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -280,7 +287,7 @@ function CreateAdminForm({ onCreated, onCancel }: { onCreated: () => void; onCan
     setError(null);
     setIsSubmitting(true);
     try {
-      await apiClient.post('/api/admin/admins', { fullName, email, password });
+      await apiClient.post('/api/admin/admins', { fullName, email, password, role });
       onCreated();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
@@ -291,6 +298,24 @@ function CreateAdminForm({ onCreated, onCancel }: { onCreated: () => void; onCan
 
   return (
     <form onSubmit={handleSubmit} className="mt-4 max-w-sm space-y-4 rounded-lg border border-border-subtle bg-gray-50 p-4">
+      <div>
+        <label className="block text-sm font-medium text-gray-700" htmlFor="newAdminRole">
+          Role
+        </label>
+        <select
+          id="newAdminRole"
+          value={role}
+          onChange={(e) => setRole(e.target.value as Exclude<AdminRole, 'MAIN_ADMIN'>)}
+          className="mt-1.5 w-full rounded-lg border border-border-subtle bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-brand-blue focus:outline-none"
+        >
+          {ASSIGNABLE_ROLES.map((r) => (
+            <option key={r.value} value={r.value}>
+              {r.label}
+            </option>
+          ))}
+        </select>
+        <p className="mt-1.5 text-xs text-gray-400">{ASSIGNABLE_ROLES.find((r) => r.value === role)?.help}</p>
+      </div>
       <div>
         <label className="block text-sm font-medium text-gray-700" htmlFor="newAdminFullName">
           Full Name
@@ -371,6 +396,7 @@ function CreateAdminForm({ onCreated, onCancel }: { onCreated: () => void; onCan
  * real, backend-enforced endpoint rather than being purely decorative, so
  * it's ready the moment a third role exists. */
 function EditRoleModal({ target, onClose, onDone }: { target: AdminAccount; onClose: () => void; onDone: () => void }) {
+  const [role, setRole] = useState<Exclude<AdminRole, 'MAIN_ADMIN'>>(target.role === 'MAIN_ADMIN' ? 'ADMIN' : target.role);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -379,7 +405,7 @@ function EditRoleModal({ target, onClose, onDone }: { target: AdminAccount; onCl
     setError(null);
     setIsSubmitting(true);
     try {
-      await apiClient.patch(`/api/admin/admins/${target.id}/role`, { role: 'ADMIN' });
+      await apiClient.patch(`/api/admin/admins/${target.id}/role`, { role });
       onDone();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
@@ -397,14 +423,18 @@ function EditRoleModal({ target, onClose, onDone }: { target: AdminAccount; onCl
         <div className="mt-4">
           <label className="block text-sm font-medium text-gray-700">Role</label>
           <select
-            disabled
-            value="ADMIN"
-            className="mt-1.5 w-full rounded-lg border border-border-subtle bg-gray-50 px-3 py-2.5 text-sm text-gray-500"
+            value={role}
+            onChange={(e) => setRole(e.target.value as Exclude<AdminRole, 'MAIN_ADMIN'>)}
+            className="mt-1.5 w-full rounded-lg border border-border-subtle bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-brand-blue focus:outline-none"
           >
-            <option value="ADMIN">Admin</option>
+            {ASSIGNABLE_ROLES.map((r) => (
+              <option key={r.value} value={r.value}>
+                {r.label}
+              </option>
+            ))}
           </select>
           <p className="mt-1.5 text-xs text-gray-400">
-            Admin is the only assignable role right now — the Main Admin role can't be reassigned.
+            {ASSIGNABLE_ROLES.find((r) => r.value === role)?.help} The Main Admin role can't be reassigned.
           </p>
         </div>
         {error && <p className="mt-3 text-sm font-medium text-brand-red">{error}</p>}
@@ -702,7 +732,142 @@ function AdminAccountsSection() {
   );
 }
 
+interface RuleSetting {
+  key: string;
+  label: string;
+  help: string;
+  type: 'number' | 'boolean';
+  value: number | boolean | null;
+  confirm: boolean;
+  nullable?: boolean;
+  isDefault: boolean;
+}
+
+/** The configurable business rules MANIBELA hasn't finalized. Visible to
+ * every role (so operators can see the thresholds that apply to them);
+ * only administrators can change them — the backend enforces that too. */
+function BusinessRulesSection() {
+  const { admin } = useAuth();
+  const canEdit = isAdminLevel(admin?.role);
+  const [rules, setRules] = useState<RuleSetting[] | null>(null);
+  const [draft, setDraft] = useState<Record<string, string | boolean>>({});
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  function toDraft(list: RuleSetting[]) {
+    return Object.fromEntries(list.map((r) => [r.key, r.type === 'boolean' ? Boolean(r.value) : r.value === null ? '' : String(r.value)]));
+  }
+
+  useEffect(() => {
+    apiClient
+      .get<{ settings: RuleSetting[] }>('/api/admin/ops/settings')
+      .then((res) => {
+        setRules(res.settings);
+        setDraft(toDraft(res.settings));
+      })
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load settings.'));
+  }, []);
+
+  const dirty = rules?.some((r) => {
+    const d = draft[r.key];
+    return r.type === 'boolean' ? d !== Boolean(r.value) : d !== (r.value === null ? '' : String(r.value));
+  });
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    if (!rules || saving) return;
+    setSaving(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const values: Record<string, number | boolean | null> = {};
+      for (const r of rules) {
+        const d = draft[r.key];
+        if (r.type === 'boolean') {
+          if (d !== Boolean(r.value)) values[r.key] = d as boolean;
+        } else if (d !== (r.value === null ? '' : String(r.value))) {
+          values[r.key] = String(d).trim() === '' ? null : Number(d);
+        }
+      }
+      await apiClient.put('/api/admin/ops/settings', { values });
+      const res = await apiClient.get<{ settings: RuleSetting[] }>('/api/admin/ops/settings');
+      setRules(res.settings);
+      setDraft(toDraft(res.settings));
+      setSaved(true);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className="mt-6">
+      <SectionHeader icon={<GearSmallIcon />} title="Business Rules" />
+      <p className="mt-1 pl-9 text-sm text-gray-500">
+        Thresholds for passenger capacity, GPS boarding checks and short-tripping. Rules marked <b>Pending MANIBELA</b> are proposals, not approved policy.
+        {!canEdit && ' Only administrators can change them.'}
+      </p>
+      {error && <p className="mt-4 text-sm font-medium text-brand-red">{error}</p>}
+      {!rules && !error && <p className="mt-4 text-sm text-gray-500">Loading...</p>}
+      {rules && (
+        <form onSubmit={save} className="mt-4 space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            {rules.map((r) => (
+              <div key={r.key} className="rounded-lg border border-border-subtle p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <label className="text-sm font-medium text-gray-800" htmlFor={`rule-${r.key}`}>
+                    {r.label}
+                  </label>
+                  {r.confirm && <span className="shrink-0 rounded-full bg-yellow-100 px-2 py-0.5 text-[10px] font-semibold text-yellow-900">Pending MANIBELA</span>}
+                </div>
+                {r.type === 'boolean' ? (
+                  <label className="mt-2 flex items-center gap-2 text-sm text-gray-700">
+                    <input id={`rule-${r.key}`} type="checkbox" disabled={!canEdit} checked={Boolean(draft[r.key])} onChange={(e) => setDraft((d) => ({ ...d, [r.key]: e.target.checked }))} />
+                    {draft[r.key] ? 'On' : 'Off'}
+                  </label>
+                ) : (
+                  <input
+                    id={`rule-${r.key}`}
+                    type="number"
+                    step="any"
+                    disabled={!canEdit}
+                    value={String(draft[r.key] ?? '')}
+                    placeholder={r.nullable ? 'Not set' : undefined}
+                    onChange={(e) => setDraft((d) => ({ ...d, [r.key]: e.target.value }))}
+                    className="mt-2 w-full rounded-lg border border-border-subtle bg-white px-3 py-2 text-sm text-gray-900 focus:border-brand-blue focus:outline-none disabled:bg-gray-50"
+                  />
+                )}
+                <p className="mt-1.5 text-xs text-gray-400">{r.help}</p>
+              </div>
+            ))}
+          </div>
+          {canEdit && (
+            <div className="flex items-center gap-3">
+              <button type="submit" disabled={saving || !dirty} className="rounded-lg bg-brand-blue px-4 py-2.5 text-sm font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60">
+                {saving ? 'Saving...' : 'Save rules'}
+              </button>
+              {saved && !dirty && <span className="text-sm font-medium text-status-good">Saved.</span>}
+            </div>
+          )}
+        </form>
+      )}
+    </Card>
+  );
+}
+
+function GearSmallIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export default function SettingsPage() {
+  const { admin } = useAuth();
   return (
     <DashboardLayout title="Settings">
       <p className="text-sm text-gray-500">Manage your admin account.</p>
@@ -710,7 +875,8 @@ export default function SettingsPage() {
       <div className="mt-6">
         <ProfileSection />
         <PasswordSection />
-        <AdminAccountsSection />
+        <BusinessRulesSection />
+        {isAdminLevel(admin?.role) && <AdminAccountsSection />}
       </div>
     </DashboardLayout>
   );

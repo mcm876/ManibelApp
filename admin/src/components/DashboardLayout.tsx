@@ -3,7 +3,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { LogoMark } from './Logo';
 import { LogoutConfirmDialog } from './LogoutConfirmDialog';
 import { NotificationBell } from './NotificationBell';
-import { useAuth } from '../lib/auth';
+import { useAuth, type AdminRole } from '../lib/auth';
 import { adminNotificationPath, useAdminNotificationFeed, type AdminNotification } from '../lib/useAdminNotificationFeed';
 
 function GridIcon() {
@@ -129,6 +129,26 @@ function AlertIcon() {
   );
 }
 
+function BusIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <rect x="3.5" y="4" width="17" height="13" rx="2.5" />
+      <path d="M3.5 11h17M7 20v-3M17 20v-3" />
+      <circle cx="7.5" cy="14" r="0.6" />
+      <circle cx="16.5" cy="14" r="0.6" />
+    </svg>
+  );
+}
+
+function ClipboardIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <rect x="5" y="4.5" width="14" height="16.5" rx="2" />
+      <path d="M9 4.5h6v2.5H9zM8.5 12h7M8.5 16h5" />
+    </svg>
+  );
+}
+
 function ChevronIcon({ collapsed }: { collapsed: boolean }) {
   return (
     <svg
@@ -177,18 +197,42 @@ function AdminIdentity({ light = false }: { light?: boolean }) {
 // `groupStart` gets each item extra top margin instead of a visible
 // divider line — quiet breathing room between Overview/Fleet/People/
 // System clusters rather than another hard rule to render.
-const navItems = [
-  { to: '/', label: 'Dashboard', icon: GridIcon, end: true, groupStart: false },
-  { to: '/jeepney-monitoring', label: 'Jeepney Monitoring', icon: RouteIcon, end: false, groupStart: true },
-  { to: '/passenger-monitoring', label: 'Passenger Monitoring', icon: MapPinIcon, end: false, groupStart: false },
-  { to: '/drivers', label: 'Drivers', icon: SteeringWheelIcon, end: false, groupStart: true },
-  { to: '/commuters', label: 'Commuters', icon: PeopleIcon, end: false, groupStart: false },
-  { to: '/id-verification', label: 'ID Verification', icon: BadgeCheckIcon, end: false, groupStart: false },
+// [roles] limits an item to those roles (absent = everyone). The backend
+// enforces access independently; this only hides what a role can't open.
+// Operators see just their own fleet: Operations, Fleet, Short-Tripping,
+// Incident Reports, Fleet Reports and Settings.
+interface NavItem {
+  to: string;
+  label: string;
+  icon: () => ReactNode;
+  end: boolean;
+  groupStart: boolean;
+  roles?: AdminRole[];
+}
+
+const ADMIN_LEVEL: AdminRole[] = ['MAIN_ADMIN', 'ADMIN'];
+const NOT_OPERATOR: AdminRole[] = ['MAIN_ADMIN', 'ADMIN', 'MANIBELA'];
+
+const navItems: NavItem[] = [
+  { to: '/', label: 'Dashboard', icon: GridIcon, end: true, groupStart: false, roles: NOT_OPERATOR },
+  { to: '/operations', label: 'Operations', icon: ClipboardIcon, end: false, groupStart: false },
+  { to: '/fleet', label: 'Fleet', icon: BusIcon, end: false, groupStart: false },
+  { to: '/short-tripping', label: 'Short-Tripping', icon: AlertIcon, end: false, groupStart: false },
+  { to: '/jeepney-monitoring', label: 'Jeepney Monitoring', icon: RouteIcon, end: false, groupStart: true, roles: NOT_OPERATOR },
+  { to: '/passenger-monitoring', label: 'Passenger Monitoring', icon: MapPinIcon, end: false, groupStart: false, roles: NOT_OPERATOR },
+  { to: '/drivers', label: 'Drivers', icon: SteeringWheelIcon, end: false, groupStart: true, roles: NOT_OPERATOR },
+  { to: '/commuters', label: 'Commuters', icon: PeopleIcon, end: false, groupStart: false, roles: NOT_OPERATOR },
+  { to: '/id-verification', label: 'ID Verification', icon: BadgeCheckIcon, end: false, groupStart: false, roles: NOT_OPERATOR },
   { to: '/incident-reports', label: 'Incident Reports', icon: AlertIcon, end: false, groupStart: false },
-  { to: '/reports', label: 'Reports', icon: ReportIcon, end: false, groupStart: true },
-  { to: '/app-content', label: 'IDs & Hotlines', icon: ListIcon, end: false, groupStart: false },
+  { to: '/fleet-reports', label: 'Fleet Reports', icon: ReportIcon, end: false, groupStart: true },
+  { to: '/reports', label: 'Earnings Log Report', icon: ReportIcon, end: false, groupStart: false, roles: NOT_OPERATOR },
+  { to: '/app-content', label: 'IDs & Hotlines', icon: ListIcon, end: false, groupStart: false, roles: ADMIN_LEVEL },
   { to: '/settings', label: 'Settings', icon: GearIcon, end: false, groupStart: false },
 ];
+
+function navItemsFor(role?: AdminRole): NavItem[] {
+  return navItems.filter((item) => !item.roles || (role !== undefined && item.roles.includes(role)));
+}
 
 // Precomputed pixel offsets for the sliding active-indicator below — kept
 // in sync with each row's actual height (h-11 = 44px), the flex gap
@@ -198,13 +242,13 @@ const navItems = [
 const ROW_HEIGHT = 44;
 const ROW_GAP = 2;
 const GROUP_GAP_EXTRA = 14;
-const navOffsets: number[] = (() => {
+function computeNavOffsets(items: NavItem[]): number[] {
   let y = 0;
-  return navItems.map((item, i) => {
+  return items.map((item, i) => {
     if (i > 0) y += ROW_HEIGHT + ROW_GAP + (item.groupStart ? GROUP_GAP_EXTRA : 0);
     return y;
   });
-})();
+}
 
 function isNavItemActive(pathname: string, to: string, end: boolean): boolean {
   return end ? pathname === to : pathname === to || pathname.startsWith(`${to}/`);
@@ -214,7 +258,9 @@ function SidebarContent({ onNavigate, collapsed = false }: { onNavigate?: () => 
   const { admin, logout } = useAuth();
   const [confirmingLogout, setConfirmingLogout] = useState(false);
   const { pathname } = useLocation();
-  const activeIndex = navItems.findIndex(({ to, end }) => isNavItemActive(pathname, to, end));
+  const items = navItemsFor(admin?.role);
+  const navOffsets = computeNavOffsets(items);
+  const activeIndex = items.findIndex(({ to, end }) => isNavItemActive(pathname, to, end));
 
   return (
     <>
@@ -236,7 +282,7 @@ function SidebarContent({ onNavigate, collapsed = false }: { onNavigate?: () => 
             style={{ transform: `translateY(${navOffsets[activeIndex]}px)` }}
           />
         )}
-        {navItems.map(({ to, label, icon: Icon, end, groupStart }) => (
+        {items.map(({ to, label, icon: Icon, end, groupStart }) => (
           <NavLink
             key={to}
             to={to}
@@ -282,6 +328,7 @@ const COLLAPSE_STORAGE_KEY = 'adminSidebarCollapsed';
 
 export function DashboardLayout({ children, title }: { children: ReactNode; title?: string }) {
   const navigate = useNavigate();
+  const { admin } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSE_STORAGE_KEY) === 'true');
 
@@ -294,7 +341,7 @@ export function DashboardLayout({ children, title }: { children: ReactNode; titl
   // there's a single source of truth for the badge and exactly one toast
   // per arriving notification instead of one per header.
   const { notifications, unreadCount, markAllRead, toasts, dismissToast, hasNextPage, isLoadingMore, loadMore } =
-    useAdminNotificationFeed();
+    useAdminNotificationFeed(admin?.role !== 'OPERATOR');
 
   const handleToastClick = (n: AdminNotification) => {
     dismissToast(n.id);

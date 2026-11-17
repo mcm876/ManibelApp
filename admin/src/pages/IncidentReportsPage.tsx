@@ -44,14 +44,14 @@ interface ComplaintsResponse {
 const FILTERS: { label: string; value: '' | 'pending' | 'investigating' | 'resolved' | 'rejected' }[] = [
   { label: 'All', value: '' },
   { label: 'Pending', value: 'pending' },
-  { label: 'Investigating', value: 'investigating' },
+  { label: 'Under Review', value: 'investigating' },
   { label: 'Resolved', value: 'resolved' },
-  { label: 'Rejected', value: 'rejected' },
+  { label: 'Dismissed', value: 'rejected' },
 ];
 
 // Must match COMPLAINT_TYPES in the backend's admin.ts/commuter.ts — what a
 // commuter's complaintType is actually restricted to at submission.
-const COMPLAINT_TYPES = ['Reckless Driving', 'Overcharging', 'Rude Behavior', 'Route Deviation', 'Other'];
+const COMPLAINT_TYPES = ['Reckless Driving', 'Overcharging', 'Rude Behavior', 'Route Deviation', 'Short-Tripping', 'Other'];
 
 function AlertIcon() {
   return (
@@ -190,9 +190,9 @@ export default function IncidentReportsPage() {
             changeLabel="vs last month"
           />
           <StatCard label="Pending" value={stats.pending} icon={<ClockIcon />} tone="warning" />
-          <StatCard label="Investigating" value={stats.investigating} icon={<SearchIcon />} />
+          <StatCard label="Under Review" value={stats.investigating} icon={<SearchIcon />} />
           <StatCard label="Resolved" value={stats.resolved} icon={<CheckIcon />} tone="good" />
-          <StatCard label="Rejected" value={stats.rejected} icon={<CrossIcon />} tone="critical" />
+          <StatCard label="Dismissed" value={stats.rejected} icon={<CrossIcon />} tone="critical" />
         </div>
       ) : (
         <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">

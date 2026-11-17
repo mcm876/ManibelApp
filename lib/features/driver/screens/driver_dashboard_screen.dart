@@ -16,9 +16,12 @@ import '../../../core/utils/location_settings.dart';
 import '../../../core/widgets/logout_confirmation_sheet.dart';
 import '../../../core/widgets/signing_out_screen.dart';
 import '../../auth/screens/driver_login_screen.dart';
+import '../../../core/services/fleet_api.dart';
+import '../widgets/driver_status_banner.dart';
 import '../widgets/passenger_info_sheet.dart';
 import 'driver_daily_operations_screen.dart';
 import 'driver_history_screen.dart';
+import 'driver_incidents_screen.dart';
 import 'driver_menu_drawer.dart';
 import 'driver_monthly_analytics_screen.dart';
 import 'driver_notifications_screen.dart';
@@ -84,6 +87,10 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
   // than trusted from whatever was last cached, since an admin can
   // approve/reject at any time from outside the app.
   String? _licenseStatus;
+
+  // Trip-start restriction / suspension / reports awaiting an explanation —
+  // straight from the server, so it's the same on every device.
+  DriverStatusInfo? _driverStatus;
 
   bool get _isOnline => _activeTrip != null;
 
@@ -155,11 +162,13 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
     });
     _fetchTodayStats();
     _refreshLicenseStatus();
+    _refreshDriverStatus();
     _restoreActiveTrip();
     _notificationPollTimer = Timer.periodic(const Duration(seconds: 20), (_) {
       DriverNotificationsScreen.fetchRemote().then((_) {
         if (mounted) setState(() {});
       });
+      _refreshDriverStatus();
     });
     _licenseStatusPollTimer = Timer.periodic(const Duration(seconds: 20), (_) {
       if (_isCovered) return;
@@ -170,6 +179,24 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
       if (_isCovered) return;
       _fetchDemandSignals();
     });
+  }
+
+  Future<void> _refreshDriverStatus() async {
+    if (_isCovered) return;
+    try {
+      final status = await FleetApi.fetchStatus();
+      if (mounted) setState(() => _driverStatus = status);
+    } catch (_) {
+      // Best-effort: keep whatever was last shown. The server still enforces
+      // restrictions when a trip is started.
+    }
+  }
+
+  Future<void> _openIncidents() async {
+    _tripScreenOpen = true;
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => const DriverIncidentsScreen()));
+    _tripScreenOpen = false;
+    _refreshDriverStatus();
   }
 
   /// True while the Start Trip or live trip screen is on top of this one —
@@ -260,7 +287,9 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
       if (tracker.isActive || _activeTrip != null) return;
 
       final route = trip['route'] as String?;
-      final plate = DriverSession.instance.plateNumber ?? '—';
+      // The trip's own plate (the jeepney actually being driven), not the
+      // account's default one — a driver can have several.
+      final plate = trip['plateNumber'] as String? ?? DriverSession.instance.plateNumber ?? '—';
       final startedAt =
           DateTime.tryParse(trip['startedAt'] as String? ?? '')?.toLocal() ??
           DateTime.now();
@@ -273,6 +302,8 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
         plateNumber: plate,
         startTime: startedAt,
         lastKnownLocation: lat != null && lng != null ? LatLng(lat, lng) : null,
+        vehicleId: trip['vehicleId'] as String?,
+        seatingCapacity: (trip['capacitySnapshot'] as num?)?.toInt(),
       );
       if (!mounted) return;
       setState(
@@ -723,6 +754,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
         onSettingsTap: _openSettings,
         onQrCodeTap: _openQrCode,
         onTripHistoryTap: _openTripHistory,
+        onIncidentsTap: _openIncidents,
         onLogoutTap: _handleLogout,
       ),
 
@@ -816,6 +848,12 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                 ],
               ),
               const SizedBox(height: 16),
+
+              DriverStatusBanner(
+                status: _driverStatus,
+                onOpenIncidents: _openIncidents,
+                onMayHaveExpired: _refreshDriverStatus,
+              ),
 
               // Driver Profile Header Card — same yellow gradient banner
               // convention used across the commuter side.

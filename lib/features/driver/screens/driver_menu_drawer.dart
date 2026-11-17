@@ -16,6 +16,7 @@ class DriverMenuDrawer extends StatelessWidget {
   final VoidCallback? onSettingsTap;
   final VoidCallback? onQrCodeTap;
   final VoidCallback? onTripHistoryTap;
+  final VoidCallback? onIncidentsTap;
   final VoidCallback? onLogoutTap;
 
   const DriverMenuDrawer({
@@ -27,6 +28,7 @@ class DriverMenuDrawer extends StatelessWidget {
     this.onSettingsTap,
     this.onQrCodeTap,
     this.onTripHistoryTap,
+    this.onIncidentsTap,
     this.onLogoutTap,
   });
 
@@ -122,6 +124,27 @@ class DriverMenuDrawer extends StatelessWidget {
 
                         if (onTripHistoryTap != null) {
                           onTripHistoryTap!();
+                        }
+                      },
+                    ),
+
+                    _buildMenuDivider(),
+
+                    // ===================================================
+                    // SHORT-TRIPPING REPORTS
+                    // ===================================================
+
+                    _buildMenuButton(
+                      context: context,
+                      icon: Icons.report_gmailerrorred_rounded,
+                      label: 'Short-Tripping Reports',
+                      iconColor: AppColors.secondary,
+
+                      onTap: () {
+                        Navigator.pop(context);
+
+                        if (onIncidentsTap != null) {
+                          onIncidentsTap!();
                         }
                       },
                     ),

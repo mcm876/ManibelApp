@@ -6,6 +6,7 @@ import healthRouter from './routes/health';
 import commuterRouter from './routes/commuter';
 import driverRouter from './routes/driver';
 import adminRouter from './routes/admin';
+import opsRouter from './routes/ops';
 import { errorHandler } from './middleware/errorHandler';
 import { apiLimiter } from './middleware/rateLimit';
 import { startDriverLogReminderJobs } from './jobs/driverLogReminders';
@@ -62,6 +63,8 @@ app.get('/', (_req, res) => {
 app.use('/api/health', healthRouter);
 app.use('/api/commuter', commuterRouter);
 app.use('/api/driver', driverRouter);
+// Before adminRouter so /api/admin/ops/* isn't swallowed by its (legacy) guard.
+app.use('/api/admin/ops', opsRouter);
 app.use('/api/admin', adminRouter);
 
 app.use(errorHandler);

@@ -14,10 +14,19 @@ const STATUS_STYLES: Record<ComplaintStatus, string> = {
   REJECTED: 'bg-status-critical-bg text-status-critical',
 };
 
+// The stored values predate the labels MANIBELA uses: INVESTIGATING is shown
+// as "Under Review" and REJECTED as "Dismissed".
+export const COMPLAINT_STATUS_LABELS: Record<ComplaintStatus, string> = {
+  PENDING: 'Pending',
+  INVESTIGATING: 'Under Review',
+  RESOLVED: 'Resolved',
+  REJECTED: 'Dismissed',
+};
+
 export function ComplaintStatusBadge({ status }: { status: ComplaintStatus }) {
   return (
     <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${STATUS_STYLES[status]}`}>
-      {status}
+      {COMPLAINT_STATUS_LABELS[status]}
     </span>
   );
 }

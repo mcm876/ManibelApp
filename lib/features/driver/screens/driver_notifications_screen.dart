@@ -8,6 +8,7 @@ import '../../../core/services/driver_session.dart';
 import '../../../core/utils/manila_date_range.dart';
 import 'driver_daily_operations_screen.dart';
 import 'driver_history_screen.dart';
+import 'driver_incidents_screen.dart';
 import 'driver_monthly_analytics_screen.dart';
 import 'driver_settings_screen.dart';
 import 'driver_weekly_analytics_screen.dart';
@@ -225,6 +226,10 @@ class _DriverNotificationsScreenState extends State<DriverNotificationsScreen> {
   Future<void> _openNotificationTarget(DriverAppNotification item) async {
     if (item.type == 'PLATE_NUMBER_UPDATED') {
       Navigator.push(context, MaterialPageRoute(builder: (_) => const DriverSettingsScreen()));
+      return;
+    }
+    if (item.type == 'SHORT_TRIP_INCIDENT' || item.type == 'DRIVER_RESTRICTION') {
+      Navigator.push(context, MaterialPageRoute(builder: (_) => const DriverIncidentsScreen()));
       return;
     }
     if (item.type == 'DAILY_LOG_REMINDER') {
@@ -518,6 +523,8 @@ class _NotificationCard extends StatelessWidget {
     'TRIP_REVIEWED',
     'TRIP_COMPLETED',
     'PLATE_NUMBER_UPDATED',
+    'SHORT_TRIP_INCIDENT',
+    'DRIVER_RESTRICTION',
   };
 
   bool get _isNavigable => item.type != null && _navigableTypes.contains(item.type);

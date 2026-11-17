@@ -19,7 +19,7 @@ import {
   calculateAge,
   MIN_ADULT_AGE,
 } from '../utils/date';
-import { requireAuth, requireMainAdmin } from '../middleware/auth';
+import { requireAuth, requireMainAdmin, requireStaff, adminRoleGuard, operatorDriverIds } from '../middleware/auth';
 import { uploadAdminLicensePhotos, uploadBufferToCloudinary, deleteUploadedPhoto } from '../middleware/upload';
 import { notifyDriver, notifyCommuter } from '../utils/notify';
 import { issueOtp, verifyOtp } from '../utils/otp';
@@ -29,6 +29,9 @@ const router = Router();
 
 // Unauthenticated + brute-forceable — see middleware/rateLimit.ts.
 router.use(['/login', '/forgot-password', '/verify-otp', '/reset-password'], authLimiter);
+
+// OPERATOR/MANIBELA accounts are fenced to what they may touch (see the guard).
+router.use(adminRoleGuard);
 
 function toPublicAdmin(admin: {
   id: string;
@@ -1884,8 +1887,16 @@ router.get('/onboard-passengers', requireAuth('admin'), async (_req, res, next) 
 // INCIDENT REPORTS (complaints)
 // ---------------------------------------------------------------------------
 
-router.get('/complaint-stats', requireAuth('admin'), async (_req, res, next) => {
+/** Complaints an OPERATOR may see are those about its own drivers; every
+ * other staff role sees all. Returns the extra Prisma `where` to AND in. */
+async function complaintScope(req: { staff?: { id: string; role: string } }): Promise<{ driverId?: { in: string[] } }> {
+  if (req.staff?.role !== 'OPERATOR') return {};
+  return { driverId: { in: await operatorDriverIds(req.staff.id) } };
+}
+
+router.get('/complaint-stats', requireAuth('admin'), requireStaff(), async (req, res, next) => {
   try {
+    const scope = await complaintScope(req);
     const now = Date.now();
     const startOfThisMonth = new Date(now);
     startOfThisMonth.setDate(1);
@@ -1894,13 +1905,13 @@ router.get('/complaint-stats', requireAuth('admin'), async (_req, res, next) => 
     startOfLastMonth.setMonth(startOfLastMonth.getMonth() - 1);
 
     const [total, pending, investigating, resolved, rejected, newThisMonth, newLastMonth] = await Promise.all([
-      prisma.complaint.count(),
-      prisma.complaint.count({ where: { status: 'PENDING' } }),
-      prisma.complaint.count({ where: { status: 'INVESTIGATING' } }),
-      prisma.complaint.count({ where: { status: 'RESOLVED' } }),
-      prisma.complaint.count({ where: { status: 'REJECTED' } }),
-      prisma.complaint.count({ where: { createdAt: { gte: startOfThisMonth } } }),
-      prisma.complaint.count({ where: { createdAt: { gte: startOfLastMonth, lt: startOfThisMonth } } }),
+      prisma.complaint.count({ where: scope }),
+      prisma.complaint.count({ where: { ...scope, status: 'PENDING' } }),
+      prisma.complaint.count({ where: { ...scope, status: 'INVESTIGATING' } }),
+      prisma.complaint.count({ where: { ...scope, status: 'RESOLVED' } }),
+      prisma.complaint.count({ where: { ...scope, status: 'REJECTED' } }),
+      prisma.complaint.count({ where: { ...scope, createdAt: { gte: startOfThisMonth } } }),
+      prisma.complaint.count({ where: { ...scope, createdAt: { gte: startOfLastMonth, lt: startOfThisMonth } } }),
     ]);
 
     res.json({
@@ -1920,7 +1931,7 @@ router.get('/complaint-stats', requireAuth('admin'), async (_req, res, next) => 
 // is actually validated/restricted to at submission) — same reasoning as
 // DRIVER_ROUTES being kept in sync across files rather than shared, since
 // each file's copy is read-only and small.
-const COMPLAINT_TYPES = ['Reckless Driving', 'Overcharging', 'Rude Behavior', 'Route Deviation', 'Other'] as const;
+const COMPLAINT_TYPES = ['Reckless Driving', 'Overcharging', 'Rude Behavior', 'Route Deviation', 'Short-Tripping', 'Other'] as const;
 
 const complaintsQuerySchema = z.object({
   status: z.enum(['pending', 'investigating', 'resolved', 'rejected']).optional(),
@@ -1930,9 +1941,10 @@ const complaintsQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
 });
 
-router.get('/complaints', requireAuth('admin'), async (req, res, next) => {
+router.get('/complaints', requireAuth('admin'), requireStaff(), async (req, res, next) => {
   try {
     const query = complaintsQuerySchema.parse(req.query);
+    const scope = await complaintScope(req);
 
     // Complaint has no Prisma relation to Driver/Commuter (see the manual
     // findMany-by-id lookups below) — a name/plate search has to resolve
@@ -1968,6 +1980,7 @@ router.get('/complaints', requireAuth('admin'), async (req, res, next) => {
     }
 
     const where = {
+      ...scope,
       ...(query.status ? { status: query.status.toUpperCase() as 'PENDING' | 'INVESTIGATING' | 'RESOLVED' | 'REJECTED' } : {}),
       ...(query.type ? { complaintType: query.type } : {}),
       ...(searchOr ? { OR: searchOr } : {}),
@@ -2015,10 +2028,11 @@ router.get('/complaints', requireAuth('admin'), async (req, res, next) => {
   }
 });
 
-router.get('/complaints/:id', requireAuth('admin'), async (req, res, next) => {
+router.get('/complaints/:id', requireAuth('admin'), requireStaff(), async (req, res, next) => {
   try {
     const id: string = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-    const complaint = await prisma.complaint.findUnique({ where: { id } });
+    const scope = await complaintScope(req);
+    const complaint = await prisma.complaint.findFirst({ where: { id, ...scope } });
     if (!complaint) {
       res.status(404).json({ error: 'Complaint not found.' });
       return;
@@ -2041,6 +2055,11 @@ router.get('/complaints/:id', requireAuth('admin'), async (req, res, next) => {
         description: complaint.description,
         attachmentUrl: complaint.attachmentUrl,
         status: complaint.status,
+        investigationNotes: complaint.investigationNotes,
+        actionTaken: complaint.actionTaken,
+        sanction: complaint.sanction,
+        resolution: complaint.resolution,
+        reviewedAt: complaint.reviewedAt,
         createdAt: complaint.createdAt,
       },
     });
@@ -2049,16 +2068,40 @@ router.get('/complaints/:id', requireAuth('admin'), async (req, res, next) => {
   }
 });
 
+// Status plus the review trail. "Under Review" is INVESTIGATING and
+// "Dismissed" is REJECTED — the enum names predate those labels. A complaint
+// never changes the driver's status by itself: any sanction is only *recorded*
+// here, and disciplinary status is changed separately by an authorized person.
 const complaintStatusSchema = z.object({
   status: z.enum(['INVESTIGATING', 'RESOLVED', 'REJECTED']),
+  investigationNotes: z.string().trim().max(4000).optional(),
+  actionTaken: z.string().trim().max(2000).optional(),
+  sanction: z.string().trim().max(1000).optional(),
+  resolution: z.string().trim().max(2000).optional(),
 });
 
-router.patch('/complaints/:id/status', requireAuth('admin'), async (req, res, next) => {
+router.patch('/complaints/:id/status', requireAuth('admin'), requireStaff(), async (req, res, next) => {
   try {
     const id: string = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     const body = complaintStatusSchema.parse(req.body);
+    const scope = await complaintScope(req);
 
-    const complaint = await prisma.complaint.update({ where: { id }, data: { status: body.status } });
+    if (!(await prisma.complaint.findFirst({ where: { id, ...scope }, select: { id: true } }))) {
+      res.status(404).json({ error: 'Complaint not found.' });
+      return;
+    }
+    const complaint = await prisma.complaint.update({
+      where: { id },
+      data: {
+        status: body.status,
+        ...(body.investigationNotes !== undefined ? { investigationNotes: body.investigationNotes } : {}),
+        ...(body.actionTaken !== undefined ? { actionTaken: body.actionTaken } : {}),
+        ...(body.sanction !== undefined ? { sanction: body.sanction } : {}),
+        ...(body.resolution !== undefined ? { resolution: body.resolution } : {}),
+        reviewedById: req.staff!.id,
+        reviewedAt: new Date(),
+      },
+    });
 
     const complaintStatusTitle: Record<typeof body.status, string> = {
       INVESTIGATING: 'Your complaint is being investigated',
@@ -2256,6 +2299,9 @@ const createAdminSchema = z.object({
   fullName: z.string().trim().min(1).transform(toTitleCase),
   email: z.string().trim().email(),
   password: z.string().min(8),
+  // ADMIN keeps full access; OPERATOR sees only its own drivers/jeepneys;
+  // MANIBELA is the association-level, mostly read-only view.
+  role: z.enum(['ADMIN', 'OPERATOR', 'MANIBELA']).default('ADMIN'),
 });
 
 router.post('/admins', requireAuth('admin'), requireMainAdmin(), async (req, res, next) => {
@@ -2275,7 +2321,7 @@ router.post('/admins', requireAuth('admin'), requireMainAdmin(), async (req, res
     // logic. There is no "create another Main Admin" path.
     const passwordHash = await bcrypt.hash(body.password, 10);
     const admin = await prisma.admin.create({
-      data: { fullName: body.fullName, email, passwordHash, role: 'ADMIN' },
+      data: { fullName: body.fullName, email, passwordHash, role: body.role },
     });
 
     res.status(201).json({ admin: toPublicAdmin(admin) });
@@ -2289,7 +2335,7 @@ const changeRoleSchema = z.object({
   // second account would collide with the singleton Main Admin the moment
   // it happened, and there's no accompanying "demote the current one"
   // step for this endpoint to also perform.
-  role: z.literal('ADMIN'),
+  role: z.enum(['ADMIN', 'OPERATOR', 'MANIBELA']),
 });
 
 router.patch('/admins/:id/role', requireAuth('admin'), requireMainAdmin(), async (req, res, next) => {

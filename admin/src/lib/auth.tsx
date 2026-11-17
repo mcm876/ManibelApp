@@ -3,7 +3,27 @@ import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { apiClient, ApiError } from './apiClient';
 import { LoadingScreen } from '../components/LoadingScreen';
 
-export type AdminRole = 'MAIN_ADMIN' | 'ADMIN';
+/** MAIN_ADMIN/ADMIN: everything. OPERATOR: only its own drivers and
+ * jeepneys. MANIBELA: association-level, mostly read-only. The backend
+ * enforces all of this — the UI only hides what a role can't use. */
+export type AdminRole = 'MAIN_ADMIN' | 'ADMIN' | 'OPERATOR' | 'MANIBELA';
+
+export const ROLE_LABELS: Record<AdminRole, string> = {
+  MAIN_ADMIN: 'Main Admin',
+  ADMIN: 'Admin',
+  OPERATOR: 'Operator',
+  MANIBELA: 'MANIBELA',
+};
+
+/** Can add/edit vehicles, assignments, driver status, incidents. */
+export function canManageFleet(role?: AdminRole): boolean {
+  return role === 'MAIN_ADMIN' || role === 'ADMIN' || role === 'OPERATOR';
+}
+
+/** Can change business-rule settings and assign drivers to operators. */
+export function isAdminLevel(role?: AdminRole): boolean {
+  return role === 'MAIN_ADMIN' || role === 'ADMIN';
+}
 
 export interface Admin {
   id: string;
@@ -145,12 +165,15 @@ export function useAuth(): AuthContextValue {
   return ctx;
 }
 
-export function ProtectedRoute({ children }: { children: ReactNode }) {
+/** [roles] restricts the page to those roles (anyone else is sent to the
+ * Operations page, which every role can open). */
+export function ProtectedRoute({ children, roles }: { children: ReactNode; roles?: AdminRole[] }) {
   const { admin, isLoading, isLoggingOut } = useAuth();
   const location = useLocation();
 
   if (isLoading || isLoggingOut) return null;
   if (!admin) return <Navigate to="/login" state={{ from: location }} replace />;
+  if (roles && !roles.includes(admin.role)) return <Navigate to="/operations" replace />;
   return <>{children}</>;
 }
 

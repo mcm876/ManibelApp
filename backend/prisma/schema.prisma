@@ -61,20 +61,20 @@ enum PhotoAccessTargetType {
 }
 
 model Commuter {
-  id              String    @id @default(cuid())
-  commuterId      String    @unique
-  fullName        String
-  mobileNumber    String    @unique
-  passwordHash    String
-  dateOfBirth     DateTime? @db.Date
-  photoUrl        String?
+  id           String    @id @default(cuid())
+  commuterId   String    @unique
+  fullName     String
+  mobileNumber String    @unique
+  passwordHash String
+  dateOfBirth  DateTime? @db.Date
+  photoUrl     String?
 
   /// Contact email, stored lowercase. Required at sign-up (see
   /// verifySignupOtpSchema) and shown to admins on incident reports so
   /// they can follow up; also where notification emails go (see
   /// utils/notify.ts). Nullable only because accounts created before
   /// this field existed have none — they can add one from Settings.
-  email           String?   @unique
+  email String? @unique
 
   /// Set once the commuter verifies the OTP sent at signup. Null until
   /// then — nothing currently gates on this being set (the ID/KYC steps
@@ -85,10 +85,10 @@ model Commuter {
   /// Carried over from PendingCommuterSignup at signup redemption — the
   /// government ID type/photos and selfie captured during onboarding.
   /// Stored for the account's lifetime as the KYC record.
-  idType          String?
-  idFrontUrl      String?
-  idBackUrl       String?
-  selfieUrl       String?
+  idType     String?
+  idFrontUrl String?
+  idBackUrl  String?
+  selfieUrl  String?
 
   /// 0-100 similarity between [selfieUrl] and the photo on [idFrontUrl],
   /// computed once at /signup via lib/faceMatch.ts (face-api.js, local —
@@ -97,22 +97,22 @@ model Commuter {
   /// frame, model failed to load, etc.) — treated exactly like a
   /// below-threshold score, never blocks signup. Purely informational
   /// once set; an admin's later APPROVED/REJECTED call doesn't touch it.
-  faceMatchScore  Int?
+  faceMatchScore Int?
 
   /// Birth date and expiry date the app read off the ID photo (on-device
   /// OCR) — null when unreadable. An ID that is expired, or shows an age
   /// under MIN_ADULT_AGE, is rejected outright before it gets here (see
   /// lib/idChecks.ts); these are kept so the admin reviewing a PENDING
   /// account can see what was read.
-  idBirthDate     DateTime? @db.Date
-  idExpiryDate    DateTime? @db.Date
+  idBirthDate  DateTime? @db.Date
+  idExpiryDate DateTime? @db.Date
 
   /// Why this account couldn't be auto-approved and is waiting on a human
   /// (FACE_NOT_MATCHED, FACE_UNVERIFIED, BIRTH_DATE_MISMATCH,
   /// BIRTH_DATE_UNREADABLE, EXPIRY_DATE_UNREADABLE — see lib/idChecks.ts).
   /// Empty when auto-approved or nothing has been submitted. Returned by
   /// GET /verification-status so the commuter is told what happened.
-  reviewReasons   String[]  @default([])
+  reviewReasons String[] @default([])
 
   /// Null until ID/selfie is submitted (nothing to review yet); set at
   /// /signup to APPROVED (auto-cleared, see FACE_MATCH_AUTO_CLEAR_SCORE
@@ -129,21 +129,21 @@ model Commuter {
   /// true alongside verificationStatus. An admin can also flip it back
   /// to false later to soft-disable an already-approved account without
   /// deleting it.
-  isActive        Boolean   @default(false)
+  isActive Boolean @default(false)
 
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Driver {
-  id            String    @id @default(cuid())
-  driverId      String    @unique
-  fullName      String
-  mobileNumber  String    @unique
-  passwordHash  String
-  plateNumber   String
-  dateOfBirth   DateTime? @db.Date
-  photoUrl      String?
+  id           String    @id @default(cuid())
+  driverId     String    @unique
+  fullName     String
+  mobileNumber String    @unique
+  passwordHash String
+  plateNumber  String
+  dateOfBirth  DateTime? @db.Date
+  photoUrl     String?
 
   /// Front + back of this driver's license, plus the face-verification
   /// selfie, all submitted together by the driver themselves (Settings
@@ -161,7 +161,7 @@ model Driver {
   /// own doc comment for the full explanation. Null means the
   /// comparison couldn't confidently find a face in one or both photos;
   /// treated exactly like a below-threshold score.
-  faceMatchScore  Int?
+  faceMatchScore Int?
 
   /// The license number on file. Set one of two ways, both admin-only,
   /// via PATCH /api/admin/drivers/:id/license-number: recorded directly
@@ -192,13 +192,25 @@ model Driver {
   /// /me/qr-token lazily fills it in for any that slip through. This is
   /// what makes the QR "backend-verified" rather than just one that
   /// encodes the driverId directly, which anyone could forge.
-  qrToken       String?   @unique
+  qrToken String? @unique
 
-  /// Soft-disable — same as Commuter.isActive.
-  isActive      Boolean   @default(true)
+  /// Soft-disable — same as Commuter.isActive. This is the *login* lock only.
+  isActive Boolean @default(true)
 
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  /// Operating status vs. discipline — deliberately two fields, never
+  /// combined. A driver who stops driving is INACTIVE (not suspended).
+  /// SUSPENDED blocks starting trips (see POST /driver/trips/start).
+  operationalStatus  OperationalStatus  @default(ACTIVE)
+  disciplinaryStatus DisciplinaryStatus @default(NONE)
+
+  /// The OPERATOR admin (Admin.id) responsible for this driver. Null =
+  /// unassigned: only MAIN_ADMIN/ADMIN/MANIBELA can see the driver.
+  operatorId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([operatorId])
 }
 
 /// A single jeepney run — created when a driver taps "Start Trip" and
@@ -224,8 +236,8 @@ model Trip {
   /// since [currentLat]/[currentLng] alone don't carry a timestamp.
   locationUpdatedAt DateTime?
 
-  startedAt  DateTime   @default(now())
-  endedAt    DateTime?
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
 
   /// The vehicle's odometer reading (km) the driver entered before this trip
   /// started — required by POST /api/driver/trips/start for any new trip and
@@ -240,6 +252,26 @@ model Trip {
   /// is the vehicle. Snapshotted so odometer history stays with the vehicle
   /// even if the driver's plate is later edited or the vehicle changes hands.
   plateNumber String?
+
+  /// The jeepney actually being driven — chosen by the driver from the
+  /// vehicles assigned to them when the trip starts. Null only on trips from
+  /// before vehicles existed. Never changes once set (no switching mid-trip),
+  /// and survives later assignment changes, so history stays attributable.
+  vehicleId String?
+  vehicle   Vehicle? @relation(fields: [vehicleId], references: [id])
+
+  /// Registered seating capacity of [vehicleId] when the trip started — for
+  /// reports. Live occupancy checks use the vehicle's current capacity.
+  capacitySnapshot Int?
+
+  /// Non-app passengers currently on board, counted by the driver with
+  /// +1/-1 (see ManualPassengerAdjustment). Never negative (CHECK
+  /// constraint). App passengers are NOT stored here: they are derived from
+  /// open BOARDED TripBoarding rows so they can never drift.
+  manualPassengers Int @default(0)
+
+  /// Highest total occupancy seen during the trip — for reports.
+  peakOccupancy Int @default(0)
 
   /// Set by the backend, never the client, the moment a trip ends (see
   /// POST /api/driver/trips/:id/end) — two escalating duration tiers,
@@ -283,6 +315,10 @@ model Trip {
   reviewedAt      DateTime?
   reviewedBy      String?
   adminReviewNote String?
+  // Also indexed, SQL-only (Prisma's schema DSL has no partial-index
+  // syntax): a `[driverId, startedAt DESC] WHERE "currentLat" IS NOT NULL`
+  // partial index for GET /admin/jeepneys's "most recently located trip
+  // per driver" query — see migration 20260814140000_pagination_indexes.
 
   // Covers the dominant Trip History query shape on both platforms: "this
   // driver's trips, optionally COMPLETED-only, newest first" — a leading
@@ -303,10 +339,7 @@ model Trip {
   @@index([isShortTrip, reviewStatus])
   // "The previous odometer reading for this vehicle" (POST /trips/start).
   @@index([plateNumber, startedAt])
-  // Also indexed, SQL-only (Prisma's schema DSL has no partial-index
-  // syntax): a `[driverId, startedAt DESC] WHERE "currentLat" IS NOT NULL`
-  // partial index for GET /admin/jeepneys's "most recently located trip
-  // per driver" query — see migration 20260814140000_pagination_indexes.
+  @@index([vehicleId, status])
 }
 
 /// A commuter scanning a driver's QR code while that driver has an
@@ -328,10 +361,10 @@ model Trip {
 /// commuter's *previous* boarding on this trip is still open (a
 /// re-scan/re-confirm mid-ride), never once it's been alighted.
 model TripBoarding {
-  id         String    @id @default(cuid())
+  id         String   @id @default(cuid())
   tripId     String
   commuterId String
-  boardedAt  DateTime  @default(now())
+  boardedAt  DateTime @default(now())
 
   /// When this boarding stopped counting as a passenger on the jeepney —
   /// set for BOTH a completed ride (Para Po / driver ended the trip) and a
@@ -352,6 +385,10 @@ model TripBoarding {
   /// new-device sync. There's no fare/payment feature in this app — this
   /// is purely a headcount. Null on boardings from before this existed.
   riders Int?
+
+  /// The verified BoardingRequest that produced this row — null for rows
+  /// from before GPS-verified boarding existed.
+  requestId String? @unique
 
   // No longer a plain @@unique([tripId, commuterId]) — that made it
   // impossible to log more than one ride per commuter per Trip. Instead,
@@ -421,22 +458,34 @@ model DemandSignal {
 /// Trip's doc comment), resolved to a Driver row server-side at
 /// submission time.
 model Complaint {
-  id              String           @id @default(cuid())
-  complainantId   String
-  driverId        String
+  id            String          @id @default(cuid())
+  complainantId String
+  driverId      String
   /// The specific ride this complaint is about, when filed from Trip
   /// History (where the commuter picked one particular trip) rather than
   /// the general "File a Complaint" flow (where they only know the
   /// driver's plate). Null there since there's nothing to link — see
   /// Trip's doc comment on why complaints aren't otherwise tied to a
   /// trip. Only used to answer "have I already reported this trip?".
-  tripId          String?
-  complaintType   String
-  description     String
-  attachmentUrl   String?
-  status          ComplaintStatus  @default(PENDING)
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  tripId        String?
+  complaintType String
+  description   String
+  attachmentUrl String?
+  status        ComplaintStatus @default(PENDING)
+
+  /// Review trail. Statuses keep their original enum names; the UI labels
+  /// INVESTIGATING as "Under Review" and REJECTED as "Dismissed". A
+  /// complaint never changes a driver's status by itself — any sanction is
+  /// recorded here by an authorized reviewer after review.
+  investigationNotes String?
+  actionTaken        String?
+  sanction           String?
+  resolution         String?
+  reviewedById       String?
+  reviewedAt         DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Widened from a bare [status] index — covers GET /admin/complaints's
   // paginated "optionally filtered by status, newest first" query (filter
@@ -469,17 +518,17 @@ model Rating {
 }
 
 model OtpCode {
-  id            String     @id @default(cuid())
+  id           String     @id @default(cuid())
   /// A PH mobile number for commuter/driver purposes — or, for admin
   /// PASSWORD_RESET, the admin's email. Just an opaque identifier string
   /// as far as issueOtp/verifyOtp are concerned; not validated as a phone
   /// number at this layer.
-  mobileNumber  String
-  code          String
-  purpose       OtpPurpose
-  consumed      Boolean    @default(false)
-  expiresAt     DateTime
-  createdAt     DateTime   @default(now())
+  mobileNumber String
+  code         String
+  purpose      OtpPurpose
+  consumed     Boolean    @default(false)
+  expiresAt    DateTime
+  createdAt    DateTime   @default(now())
 
   @@index([mobileNumber, purpose])
 }
@@ -491,37 +540,37 @@ model OtpCode {
 /// Given a generous expiry (well beyond the OTP's own 5-minute window)
 /// since ID upload + a selfie can reasonably take a while.
 model PendingCommuterSignup {
-  id           String   @id @default(cuid())
-  ticket       String   @unique
+  id           String @id @default(cuid())
+  ticket       String @unique
   fullName     String
   mobileNumber String
   passwordHash String
 
   /// Lowercased contact email from the sign-up form — copied onto the
   /// Commuter row at /signup. Nullable for tickets that predate it.
-  email        String?
+  email String?
 
   /// Collected on the sign-up form itself (not a later step) — copied
   /// onto the Commuter row once /signup redeems this ticket. Nullable
   /// only so tickets created before this field existed don't break; the
   /// app always sends it going forward.
-  dateOfBirth  DateTime? @db.Date
+  dateOfBirth DateTime? @db.Date
 
   /// Filled in by POST /signup/:ticket/id-photos and
   /// /signup/:ticket/selfie as the app moves through those screens —
   /// null until then. Copied onto the Commuter row once /signup redeems
   /// this ticket.
-  idType       String?
-  idFrontUrl   String?
-  idBackUrl    String?
-  selfieUrl    String?
+  idType     String?
+  idFrontUrl String?
+  idBackUrl  String?
+  selfieUrl  String?
 
   /// Dates the app read off the ID (see Commuter.idBirthDate).
   idBirthDate  DateTime? @db.Date
   idExpiryDate DateTime? @db.Date
 
-  expiresAt    DateTime
-  createdAt    DateTime @default(now())
+  expiresAt DateTime
+  createdAt DateTime @default(now())
 }
 
 /// An operator/staff account for the admin web dashboard — separate from
@@ -532,8 +581,8 @@ model PendingCommuterSignup {
 /// Admin Accounts UI (see POST /api/admin/admins) instead of the CLI once
 /// a Main Admin exists.
 model Admin {
-  id           String    @id @default(cuid())
-  email        String    @unique
+  id           String @id @default(cuid())
+  email        String @unique
   passwordHash String
   fullName     String
 
@@ -546,20 +595,20 @@ model Admin {
   /// by scripts/create-admin.ts (the very first admin created becomes
   /// MAIN_ADMIN); every admin created afterwards, from either the CLI or
   /// the UI, is a regular ADMIN.
-  role         AdminRole @default(ADMIN)
+  role AdminRole @default(ADMIN)
 
   /// Soft-disable — same as Driver/Commuter.isActive. The Main Admin can
   /// never be deactivated (enforced in PATCH /admins/:id/status), so this
   /// is only ever meaningful for a regular ADMIN.
-  isActive     Boolean   @default(true)
+  isActive Boolean @default(true)
 
   /// Set on every successful POST /login — surfaced in the Admin Accounts
   /// table so the Main Admin can see who's actually using their access.
   /// Null until an admin's first login.
-  lastLoginAt  DateTime?
+  lastLoginAt DateTime?
 
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 /// One row per admin who has viewed a commuter's or driver's KYC photos
@@ -572,11 +621,11 @@ model Admin {
 /// logging every poll would turn "who looked at this" into an unreadable
 /// flood rather than a meaningful trail.
 model PhotoAccessLog {
-  id         String                 @id @default(cuid())
+  id         String                @id @default(cuid())
   adminId    String
   targetType PhotoAccessTargetType
   targetId   String
-  viewedAt   DateTime               @default(now())
+  viewedAt   DateTime              @default(now())
 
   @@index([targetType, targetId, viewedAt])
   @@index([adminId, viewedAt])
@@ -585,6 +634,46 @@ model PhotoAccessLog {
 enum AdminRole {
   MAIN_ADMIN
   ADMIN
+  /// Runs a set of drivers and jeepneys; only ever sees records it owns
+  /// (Driver.operatorId / Vehicle.operatorId) — see middleware/auth.ts.
+  OPERATOR
+  /// Association-level oversight: read-mostly view across all operators.
+  MANIBELA
+}
+
+/// Whether a driver is currently operating. Separate from [DisciplinaryStatus]
+/// and from Driver.isActive (account/login lock) — a driver who simply stops
+/// driving is INACTIVE, not suspended or deactivated.
+enum OperationalStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum DisciplinaryStatus {
+  NONE
+  WARNING
+  UNDER_INVESTIGATION
+  SUSPENDED
+}
+
+/// PENDING until the commuter's GPS has been matched against the driver's;
+/// CONFIRMED is the only state that adds a passenger. FAILED = could not be
+/// verified (too far, stale or missing GPS, jeepney full, trip ended, window
+/// expired); CANCELLED = the commuter backed out first.
+enum BoardingRequestStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+  CANCELLED
+}
+
+enum ShortTripIncidentStatus {
+  PENDING_EXPLANATION
+  EXPLAINED
+  UNDER_REVIEW
+  CONFIRMED
+  DISMISSED
+  DUPLICATE
 }
 
 /// A server-triggered notification for an async event the recipient
@@ -603,12 +692,12 @@ enum AdminRole {
 /// utils/notify.ts for the full set in use). Both null for a notification
 /// with nothing to navigate to (e.g. "your plate number was updated").
 model DriverNotification {
-  id          String    @id @default(cuid())
+  id          String   @id @default(cuid())
   recipientId String
   title       String
   message     String
-  isRead      Boolean   @default(false)
-  createdAt   DateTime  @default(now())
+  isRead      Boolean  @default(false)
+  createdAt   DateTime @default(now())
   type        String?
   /// A Trip id — navigate to that trip's details.
   referenceId String?
@@ -623,12 +712,12 @@ model DriverNotification {
 /// See DriverNotification's doc comment — same shape, commuter's own
 /// table.
 model CommuterNotification {
-  id          String    @id @default(cuid())
+  id          String   @id @default(cuid())
   recipientId String
   title       String
   message     String
-  isRead      Boolean   @default(false)
-  createdAt   DateTime  @default(now())
+  isRead      Boolean  @default(false)
+  createdAt   DateTime @default(now())
   type        String?
   referenceId String?
 
@@ -680,8 +769,19 @@ model DriverDailyLog {
   earnings      Float
   fuelExpense   Float    @default(0)
   otherExpenses Float    @default(0)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+
+  /// [earnings] above is what the DRIVER reported. This is what an
+  /// authorized reviewer confirmed against the actual collection/remittance
+  /// — null until someone does. Estimated earnings are never stored; they
+  /// are computed on read from passenger counts x a configured fare and
+  /// always labelled as estimates.
+  verifiedEarnings Float?
+  verifiedById     String?
+  verifiedAt       DateTime?
+  verificationNote String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([driverId, date])
   @@index([driverId, date])
@@ -715,4 +815,180 @@ model EmergencyHotline {
   category    String  @default("other")
   active      Boolean @default(true)
   sortOrder   Int     @default(0)
+}
+
+/// A registered jeepney. Capacity lives here (never assumed equal across
+/// vehicles). Plates are stored normalized (see utils/plate.ts). Never
+/// deleted — deactivate instead, so Trip.vehicleId always resolves.
+model Vehicle {
+  id              String   @id @default(cuid())
+  plateNumber     String   @unique
+  /// Registered passenger capacity; null = not configured yet, which blocks
+  /// starting a trip with this vehicle (capacity checks would have nothing
+  /// to compare against). MANIBELA still has to confirm whether this means
+  /// seated passengers only.
+  seatingCapacity Int?
+  operatorId      String?
+  isActive        Boolean  @default(true)
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  assignments DriverVehicleAssignment[]
+  trips       Trip[]
+
+  @@index([operatorId])
+}
+
+/// Which driver may drive which vehicle. Revoked, not deleted, so history
+/// stays. At most one open row per (driver, vehicle) — partial unique index
+/// in the migration.
+model DriverVehicleAssignment {
+  id           String    @id @default(cuid())
+  driverId     String
+  vehicleId    String
+  vehicle      Vehicle   @relation(fields: [vehicleId], references: [id])
+  assignedById String?
+  assignedAt   DateTime  @default(now())
+  revokedAt    DateTime?
+  revokedById  String?
+
+  @@index([driverId, revokedAt])
+  @@index([vehicleId, revokedAt])
+}
+
+/// A commuter pressing Board. Holds the GPS evidence while the server decides
+/// whether to confirm; only CONFIRMED creates a TripBoarding (a passenger).
+/// Separate from TripBoarding so a pending/failed attempt can never show up in
+/// any "currently on board" query.
+model BoardingRequest {
+  id              String                @id @default(cuid())
+  commuterId      String
+  tripId          String
+  vehicleId       String?
+  riders          Int                   @default(1)
+  status          BoardingRequestStatus @default(PENDING)
+  /// Client-generated key — a retried POST returns the same request.
+  clientRequestId String?
+  /// Every commuter GPS reading received, with the computed distance to the
+  /// driver and whether it passed.
+  readings        Json                  @default("[]")
+  consecutiveOk   Int                   @default(0)
+  failureCode     String?
+  failureMessage  String?
+  boardingId      String?
+  expiresAt       DateTime
+  createdAt       DateTime              @default(now())
+  resolvedAt      DateTime?
+
+  @@unique([commuterId, clientRequestId])
+  @@index([tripId, status])
+  @@index([commuterId, status])
+}
+
+/// Audit trail of every +1/-1 the driver makes for non-app passengers.
+model ManualPassengerAdjustment {
+  id              String   @id @default(cuid())
+  tripId          String
+  vehicleId       String?
+  driverId        String
+  /// +1 or -1.
+  delta           Int
+  countAfter      Int
+  /// Set when this row reverses an earlier adjustment (Undo).
+  undoOfId        String?  @unique
+  clientRequestId String?
+  createdAt       DateTime @default(now())
+
+  @@unique([driverId, clientRequestId])
+  @@index([tripId, createdAt])
+}
+
+/// Business rules that MANIBELA has not finalized, editable by admins
+/// instead of hard-coded. See lib/settings.ts for keys and defaults.
+model SystemSetting {
+  key         String   @id
+  value       Json
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+}
+
+/// A suspected "short-tripping" occurrence (passengers made to get off before
+/// their destination). Not the same thing as Trip.isShortTrip, which flags a
+/// trip that was merely too brief. Only CONFIRMED incidents count toward a
+/// restriction (default policy, configurable).
+model ShortTripIncident {
+  id                     String                  @id @default(cuid())
+  tripId                 String?
+  driverId               String
+  vehicleId              String?
+  route                  String?
+  intendedDestination    String?
+  /// COMMUTER_COMPLAINT | OPERATOR_REPORT | DRIVER_SELF_REPORT
+  source                 String
+  complaintId            String?                 @unique
+  occurredAt             DateTime
+  lat                    Float?
+  lng                    Float?
+  description            String?
+  status                 ShortTripIncidentStatus @default(PENDING_EXPLANATION)
+  explanation            String?
+  explanationSubmittedAt DateTime?
+  reviewedById           String?
+  reviewedAt             DateTime?
+  reviewNote             String?
+  /// The restriction this incident was counted into, if any.
+  restrictionId          String?
+  createdById            String?
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+
+  @@index([driverId, status])
+  @@index([status, createdAt])
+}
+
+/// A temporary block on starting new trips. Lives in the database and is
+/// judged against server time, so logout/reinstall/new device can't bypass
+/// it. Active while liftedAt is null and expiresAt is in the future.
+model DriverRestriction {
+  id              String    @id @default(cuid())
+  driverId        String
+  reason          String
+  startsAt        DateTime
+  expiresAt       DateTime
+  durationMinutes Int
+  appliedById     String?
+  incidentIds     String[]  @default([])
+  liftedAt        DateTime?
+  liftedById      String?
+  liftNote        String?
+  createdAt       DateTime  @default(now())
+
+  @@index([driverId, expiresAt])
+}
+
+/// Who did what to disciplinary/operational data. Append-only.
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorType  String
+  actorId    String?
+  action     String
+  targetType String
+  targetId   String?
+  details    Json?
+  createdAt  DateTime @default(now())
+
+  @@index([targetType, targetId, createdAt])
+  @@index([createdAt])
+}
+
+/// Why a driver did not operate on a given day (only for days with no trips).
+model DriverNonOperationDay {
+  id        String   @id @default(cuid())
+  driverId  String
+  date      DateTime @db.Date
+  reason    String
+  createdAt DateTime @default(now())
+
+  @@unique([driverId, date])
 }

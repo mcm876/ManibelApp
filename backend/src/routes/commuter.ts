@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
+import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 
 import { prisma } from '../lib/prisma';
@@ -27,6 +28,10 @@ import { compareFaces, fetchImageBuffer } from '../lib/faceMatch';
 import { idRejectionMessage, reviewReasons as computeReviewReasons } from '../lib/idChecks';
 import { distanceMeters, estimateEtaMinutes } from '../utils/geo';
 import { getRoute } from '../lib/routingService';
+import { getSettings } from '../lib/settings';
+import { SHORT_TRIPPING_COMPLAINT_TYPE, openIncidentFromComplaint, resolveDriverForPlate } from '../lib/shortTrip';
+import { getOccupancy } from '../lib/occupancy';
+import { boardingMessage, expireIfDue, submitBoardingReading, toBoardingRequestView } from '../lib/boarding';
 import { estimateTrafficCondition } from '../lib/trafficEstimate';
 
 const router = Router();
@@ -1120,7 +1125,7 @@ const nearbyJeepneysQuerySchema = z.object({
 const NEARBY_STALENESS_MS = 5 * 60 * 1000;
 
 // How far out a commuter can see a jeepney on the map/list — deliberately
-// much wider than BOARD_PROXIMITY_METERS below (boarding needs the commuter
+// much wider than the boarding distance setting (boarding needs the commuter
 // actually at the jeepney; just watching it approach doesn't).
 const NEARBY_RADIUS_METERS = 2000;
 
@@ -1318,14 +1323,16 @@ router.get('/active-trip', requireAuth('commuter'), async (req, res, next) => {
 // for just previewing who a QR belongs to before deciding to ride.
 // ---------------------------------------------------------------------------
 
-// A commuter this far from the jeepney's own last-known position isn't
-// actually standing at it — reject the boarding rather than trust a QR
-// scan or proximity tap alone, since either could be attempted from well
-// outside boarding range (a screenshotted/shared QR code, a stale
-// "nearby" list, etc.). Deliberately tighter than NEARBY_RADIUS_METERS
-// above, which only gates *seeing* a jeepney in the list — this gates
-// actually boarding it.
-const BOARD_PROXIMITY_METERS = 20;
+// Boarding is GPS-verified (see lib/boarding.ts): POST /board only opens a
+// PENDING request; the app then keeps sending fresh readings to
+// POST /board/requests/:id/readings until the server answers CONFIRMED or
+// FAILED. The proximity distance and the other limits are admin-configurable
+// settings (lib/settings.ts), not constants here.
+
+const gpsFields = {
+  accuracy: z.coerce.number().min(0).optional(),
+  fixAgeSeconds: z.coerce.number().min(0).optional(),
+};
 
 const boardSchema = z
   .object({
@@ -1334,25 +1341,40 @@ const boardSchema = z
     /// rather than a scan — the app already has this from GET
     /// /nearby-jeepneys, so there's no code to decode.
     tripId: z.string().trim().min(1).optional(),
-    // The commuter's own current position, checked against the jeepney's
-    // last-known location below — see BOARD_PROXIMITY_METERS.
     lat: z.coerce.number().min(-90).max(90),
     lng: z.coerce.number().min(-180).max(180),
-    riders: z.number().int().min(1).default(1),
+    riders: z.number().int().min(1).max(20).default(1),
+    /// Idempotency key: a retried request with the same key is the same request.
+    clientRequestId: z.string().trim().min(1).max(100).optional(),
+    ...gpsFields,
   })
   .refine((data) => !!data.qrToken || !!data.tripId, {
     message: 'Either a QR token or a trip id is required.',
     path: ['qrToken'],
   });
 
+const readingSchema = z.object({
+  lat: z.coerce.number().min(-90).max(90),
+  lng: z.coerce.number().min(-180).max(180),
+  ...gpsFields,
+});
+
 router.post('/board', requireAuth('commuter'), async (req, res, next) => {
   try {
     const body = boardSchema.parse(req.body);
+    const commuterId = req.auth!.sub;
 
-    // Two ways in: a QR scan (deterministic — resolves to exactly one
-    // driver) or a proximity match (no code to scan, so the client sends
-    // the tripId it already has from GET /nearby-jeepneys instead). Both
-    // end at the same place: one specific ACTIVE trip to board.
+    // Older app builds expect an instant "boarded" answer, which would put them
+    // on a screen claiming they're on board while nothing is counted. Make them
+    // update instead of silently misbehaving.
+    if (!body.clientRequestId) {
+      res.status(426).json({
+        error: 'Please update ManibelApp to board a jeepney.',
+        code: 'APP_UPDATE_REQUIRED',
+      });
+      return;
+    }
+
     let trip;
     if (body.qrToken) {
       const driver = await prisma.driver.findUnique({ where: { qrToken: body.qrToken } });
@@ -1369,62 +1391,158 @@ router.post('/board', requireAuth('commuter'), async (req, res, next) => {
       return;
     }
 
-    // Only enforceable once the driver has actually pinged a location —
-    // fails open (lets the boarding through) rather than blocking every
-    // boarding on a trip that hasn't gotten its first location update yet.
-    if (trip.currentLat != null && trip.currentLng != null) {
-      const distance = distanceMeters(body.lat, body.lng, trip.currentLat, trip.currentLng);
-      if (distance > BOARD_PROXIMITY_METERS) {
-        res.status(409).json({ error: "You're too far from this jeepney to board. Get closer and try again." });
+    const reading = { lat: body.lat, lng: body.lng, accuracy: body.accuracy, fixAgeSeconds: body.fixAgeSeconds };
+    const settings = await getSettings();
+    const respond = (view: ReturnType<typeof toBoardingRequestView>) =>
+      res.json({ ...view, boarded: view.status === 'CONFIRMED' });
+
+    // A retry of the same press — same request, never a second one.
+    const sameKey = await prisma.boardingRequest.findUnique({
+      where: { commuterId_clientRequestId: { commuterId, clientRequestId: body.clientRequestId } },
+    });
+    if (sameKey) {
+      const view =
+        sameKey.status === 'PENDING'
+          ? await submitBoardingReading(sameKey.id, commuterId, reading)
+          : toBoardingRequestView(sameKey, settings);
+      respond(view!);
+      return;
+    }
+
+    // Already riding this jeepney — report it, don't count again.
+    const open = await prisma.tripBoarding.findFirst({
+      where: { tripId: trip.id, commuterId, alightedAt: null },
+    });
+    if (open) {
+      res.json({
+        requestId: null,
+        status: 'CONFIRMED',
+        boarded: true,
+        message: "You're already on board this jeepney.",
+        tripId: trip.id,
+        boardingId: open.id,
+      });
+      return;
+    }
+
+    // Only one pending request per commuter: pressing Board again on the same
+    // jeepney continues it; a request for a different jeepney replaces it.
+    const pending = await prisma.boardingRequest.findFirst({ where: { commuterId, status: 'PENDING' } });
+    if (pending && pending.tripId === trip.id) {
+      respond((await submitBoardingReading(pending.id, commuterId, reading))!);
+      return;
+    }
+    if (pending) {
+      await prisma.boardingRequest.updateMany({
+        where: { id: pending.id, status: 'PENDING' },
+        data: { status: 'CANCELLED', resolvedAt: new Date() },
+      });
+    }
+
+    // Fail fast when it's already full — the authoritative check still happens
+    // again under lock at confirmation.
+    if (trip.vehicleId) {
+      const occ = await getOccupancy(prisma, trip.id);
+      if (!occ || occ.seatingCapacity === null) {
+        res.status(409).json({ error: boardingMessage('CAPACITY_UNKNOWN'), code: 'CAPACITY_UNKNOWN' });
+        return;
+      }
+      if (occ.totalPassengers + body.riders > occ.seatingCapacity) {
+        res.status(409).json({
+          error:
+            occ.remainingSeats === 0
+              ? boardingMessage('JEEPNEY_FULL')
+              : `Only ${occ.remainingSeats} seat${occ.remainingSeats === 1 ? '' : 's'} left, but you're boarding with ${body.riders}.`,
+          code: 'JEEPNEY_FULL',
+        });
         return;
       }
     }
 
-    // Reuse an *open* boarding on this trip if one exists — scanning the
-    // same driver's QR again mid-ride (re-confirming, accidental
-    // double-scan) shouldn't duplicate. But once a boarding's been
-    // alighted, this driver's Trip is still ACTIVE (a shift commonly
-    // spans a whole day, not one ride), so a genuinely new ride on it —
-    // rode out this morning, riding back this evening — gets its own row
-    // instead of overwriting/losing the earlier one (see TripBoarding's
-    // doc comment in schema.prisma).
-    const openBoarding = await prisma.tripBoarding.findFirst({
-      where: { tripId: trip.id, commuterId: req.auth!.sub, alightedAt: null },
-    });
-
-    let boarding;
-    if (openBoarding) {
-      boarding = await prisma.tripBoarding.update({
-        where: { id: openBoarding.id },
-        data: { riders: body.riders },
-      });
-    } else {
-      boarding = await prisma.tripBoarding.create({
+    let created;
+    try {
+      created = await prisma.boardingRequest.create({
         data: {
+          commuterId,
           tripId: trip.id,
-          commuterId: req.auth!.sub,
+          vehicleId: trip.vehicleId,
           riders: body.riders,
+          clientRequestId: body.clientRequestId,
+          expiresAt: new Date(Date.now() + (settings.boardingRequestTtlSeconds as number) * 1000),
         },
       });
+    } catch (err) {
+      // Two presses raced; the unique indexes let exactly one in. Continue that one.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        const winner = await prisma.boardingRequest.findFirst({ where: { commuterId, status: 'PENDING' } });
+        if (winner) {
+          respond((await submitBoardingReading(winner.id, commuterId, reading))!);
+          return;
+        }
+      }
+      throw err;
     }
 
-    // This commuter's need is fulfilled the moment they board — any of
-    // their still-outstanding demand signals should stop showing up as
-    // "waiting" on admin/driver maps (see fulfilledAt's doc comment in
-    // schema.prisma). Left in the table either way, so the day's
-    // demandSignalsToday total in commuter-stats is unaffected.
-    await prisma.demandSignal.updateMany({
-      where: { commuterId: req.auth!.sub, fulfilledAt: null },
-      data: { fulfilledAt: new Date() },
-    });
+    respond((await submitBoardingReading(created.id, commuterId, reading))!);
+  } catch (err) {
+    next(err);
+  }
+});
 
-    // boardingId (TripBoarding.id) is the real per-ride identity — tripId
-    // alone is ambiguous once a commuter rides the same driver's Trip more
-    // than once in a day (out and back), see TripBoarding's doc comment
-    // in schema.prisma. The client's Trip History needs this to key its
-    // own local cache by so a second ride on the same Trip gets its own
-    // entry instead of overwriting the first.
-    res.json({ boarded: true, tripId: trip.id, boardingId: boarding.id });
+// Fresh GPS reading for a pending request — the app sends these every couple
+// of seconds while "Verifying…" is showing.
+router.post('/board/requests/:id/readings', requireAuth('commuter'), async (req, res, next) => {
+  try {
+    const id: string = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const body = readingSchema.parse(req.body);
+    const view = await submitBoardingReading(id, req.auth!.sub, body);
+    if (!view) {
+      res.status(404).json({ error: 'Boarding request not found.' });
+      return;
+    }
+    res.json({ ...view, boarded: view.status === 'CONFIRMED' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/board/requests/:id', requireAuth('commuter'), async (req, res, next) => {
+  try {
+    const id: string = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    await expireIfDue(id);
+    const request = await prisma.boardingRequest.findUnique({ where: { id } });
+    if (!request || request.commuterId !== req.auth!.sub) {
+      res.status(404).json({ error: 'Boarding request not found.' });
+      return;
+    }
+    const view = toBoardingRequestView(request, await getSettings());
+    res.json({ ...view, boarded: view.status === 'CONFIRMED' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Backing out before verification finished. Only a PENDING request can be
+// cancelled here — once CONFIRMED the commuter is a passenger and uses the
+// existing ride cancel / Para Po instead.
+router.post('/board/requests/:id/cancel', requireAuth('commuter'), async (req, res, next) => {
+  try {
+    const id: string = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const request = await prisma.boardingRequest.findUnique({ where: { id } });
+    if (!request || request.commuterId !== req.auth!.sub) {
+      res.status(404).json({ error: 'Boarding request not found.' });
+      return;
+    }
+    if (request.status === 'CONFIRMED') {
+      res.status(409).json({ error: "You're already on board. Use Cancel Ride if you didn't ride.", code: 'ALREADY_CONFIRMED' });
+      return;
+    }
+    await prisma.boardingRequest.updateMany({
+      where: { id, status: 'PENDING' },
+      data: { status: 'CANCELLED', resolvedAt: new Date() },
+    });
+    const fresh = await prisma.boardingRequest.findUnique({ where: { id } });
+    res.json(toBoardingRequestView(fresh!, await getSettings()));
   } catch (err) {
     next(err);
   }
@@ -1904,7 +2022,7 @@ router.post('/trips/:tripId/rating', requireAuth('commuter'), async (req, res, n
 // Complaint" flow (where they only know the driver's plate).
 // ---------------------------------------------------------------------------
 
-const COMPLAINT_TYPES = ['Reckless Driving', 'Overcharging', 'Rude Behavior', 'Route Deviation', 'Other'] as const;
+const COMPLAINT_TYPES = ['Reckless Driving', 'Overcharging', 'Rude Behavior', 'Route Deviation', 'Short-Tripping', 'Other'] as const;
 
 const complaintSchema = z.object({
   plateNumber: z.string().trim().min(1),
@@ -1924,11 +2042,14 @@ router.post('/complaints', requireAuth('commuter'), (req, res, next) => {
       const body = complaintSchema.parse(req.body);
       const plateNumber = normalizePlateNumber(body.plateNumber);
 
-      const driver = await prisma.driver.findFirst({ where: { plateNumber } });
-      if (!driver) {
+      // A driver can have several jeepneys, so resolve who was actually
+      // driving this plate (named trip, active trip, latest trip, assignment).
+      const resolved = await resolveDriverForPlate(plateNumber, body.tripId);
+      if (!resolved) {
         res.status(404).json({ error: `No driver found with plate number ${plateNumber}.` });
         return;
       }
+      const driver = resolved.driver;
 
       const attachmentUrl = req.file
         ? await uploadBufferToCloudinary(req.file.buffer, 'complaint-attachments')
@@ -1943,6 +2064,12 @@ router.post('/complaints', requireAuth('commuter'), (req, res, next) => {
           attachmentUrl,
         },
       });
+
+      // Short-tripping is tracked as its own reviewable incident (driver must
+      // explain; counts toward a restriction only once a reviewer confirms it).
+      if (body.complaintType === SHORT_TRIPPING_COMPLAINT_TYPE) {
+        await openIncidentFromComplaint(complaint);
+      }
 
       await notifyDriver({
         recipientId: driver.id,

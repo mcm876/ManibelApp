@@ -9,7 +9,10 @@ import '../../../core/constants/map_config.dart';
 import '../../../core/constants/route_path.dart';
 import '../../../core/services/api_client.dart';
 import '../../../core/services/driver_session.dart';
+import '../../../core/services/fleet_api.dart';
+import '../widgets/restriction_notice.dart';
 import '../widgets/starting_odometer_dialog.dart';
+import '../widgets/vehicle_picker_sheet.dart';
 import 'driver_trip_in_progress_screen.dart';
 
 /// The only two routes this fleet actually services.
@@ -22,6 +25,9 @@ class DriverStartTripResult {
   final String route;
   final String plateNumber;
 
+  /// The vehicle the trip was started with (see GET /api/driver/vehicles).
+  final String vehicleId;
+
   /// The odometer reading (km) the trip was started with — already saved on
   /// the backend trip by the time this result is returned.
   final double startingOdometer;
@@ -29,6 +35,7 @@ class DriverStartTripResult {
   const DriverStartTripResult({
     required this.route,
     required this.plateNumber,
+    required this.vehicleId,
     required this.startingOdometer,
   });
 }
@@ -54,6 +61,14 @@ class DriverStartTripScreen extends StatefulWidget {
 class _DriverStartTripScreenState extends State<DriverStartTripScreen> {
   String? _selectedRoute;
   bool _starting = false;
+
+  // Which of the driver's assigned jeepneys this trip is for — chosen
+  // explicitly every time, never remembered from a previous trip.
+  DriverVehicle? _vehicle;
+
+  // Suspension / temporary restriction, from the server (null until loaded).
+  DriverStatusInfo? _status;
+  String? _statusError;
   final MapController _mapController = MapController();
 
   // Clustered demand-signal pings (see GET /api/driver/demand-signals and
@@ -67,7 +82,30 @@ class _DriverStartTripScreenState extends State<DriverStartTripScreen> {
   void initState() {
     super.initState();
     _fetchDemandSignals();
+    _loadStatus();
     _demandPollTimer = Timer.periodic(const Duration(seconds: 15), (_) => _fetchDemandSignals());
+  }
+
+  Future<void> _loadStatus() async {
+    try {
+      final status = await FleetApi.fetchStatus();
+      if (!mounted) return;
+      setState(() {
+        _status = status;
+        _statusError = null;
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      // Not fatal — the server still enforces any restriction on Start.
+      setState(() => _statusError = e.message);
+    }
+  }
+
+  bool get _blocked => _status != null && (_status!.restriction != null || _status!.suspended);
+
+  Future<void> _pickVehicle() async {
+    final picked = await showVehiclePickerSheet(context, selectedId: _vehicle?.id);
+    if (picked != null && mounted) setState(() => _vehicle = picked);
   }
 
   @override
@@ -123,6 +161,14 @@ class _DriverStartTripScreenState extends State<DriverStartTripScreen> {
       return;
     }
 
+    final vehicle = _vehicle;
+    if (vehicle == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select the jeepney you are driving.')),
+      );
+      return;
+    }
+
     final odometer = await showStartingOdometerDialog(context);
     if (odometer == null || !mounted) return;
 
@@ -133,7 +179,9 @@ class _DriverStartTripScreenState extends State<DriverStartTripScreen> {
         try {
           await DriverActiveTrip.instance.startTrip(
             route: route,
-            plateNumber: DriverSession.instance.plateNumber ?? '—',
+            plateNumber: vehicle.plateNumber,
+            vehicleId: vehicle.id,
+            seatingCapacity: vehicle.seatingCapacity,
             startTime: DateTime.now(),
             initialLocation: widget.currentLocation,
             initialLocationIsReal: widget.hasRealFix,
@@ -153,6 +201,10 @@ class _DriverStartTripScreenState extends State<DriverStartTripScreen> {
         }
       }
     } on ApiException catch (e) {
+      // The server decided (restriction, suspension, jeepney taken, capacity
+      // missing…) — show exactly why, and refresh what this screen believes.
+      final code = e.body?['code'];
+      if (code == 'TRIP_RESTRICTED' || code == 'DRIVER_SUSPENDED') _loadStatus();
       _showStartError(e.message);
       return;
     } catch (_) {
@@ -169,7 +221,8 @@ class _DriverStartTripScreenState extends State<DriverStartTripScreen> {
       context,
       DriverStartTripResult(
         route: route,
-        plateNumber: DriverSession.instance.plateNumber ?? '—',
+        plateNumber: vehicle.plateNumber,
+        vehicleId: vehicle.id,
         startingOdometer: odometer,
       ),
     );
@@ -211,7 +264,7 @@ class _DriverStartTripScreenState extends State<DriverStartTripScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final plate = DriverSession.instance.plateNumber ?? '—';
+    final vehicle = _vehicle;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF5F6F8),
@@ -251,27 +304,75 @@ class _DriverStartTripScreenState extends State<DriverStartTripScreen> {
                     ],
                   ),
                   const SizedBox(height: 14),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF2F2F3),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: const Color(0xFFE6E6E7)),
+                  if (_status?.restriction != null) ...[
+                    RestrictionNotice(restriction: _status!.restriction!, onMayHaveExpired: _loadStatus),
+                    const SizedBox(height: 10),
+                  ] else if (_status?.suspended == true) ...[
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF1F1),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: const Color(0xFFF5B5B5)),
+                      ),
+                      child: const Text(
+                        'Your account is suspended from driving, so you cannot start a trip. Please contact your operator.',
+                        style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: Color(0xFF7A1F1F)),
+                      ),
                     ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.directions_car_filled_rounded, size: 18, color: AppColors.textSecondary),
-                        const SizedBox(width: 10),
-                        const Expanded(
-                          child: Text('Vehicle Plate', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.black87)),
+                    const SizedBox(height: 10),
+                  ],
+                  const Text(
+                    'Which jeepney are you currently driving?',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 8),
+                  Material(
+                    color: const Color(0xFFF2F2F3),
+                    borderRadius: BorderRadius.circular(14),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: _starting ? null : _pickVehicle,
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: vehicle == null ? AppColors.primary : const Color(0xFFE6E6E7), width: vehicle == null ? 1.5 : 1),
                         ),
-                        Text(plate, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: AppColors.textPrimary)),
-                        const SizedBox(width: 6),
-                        const Icon(Icons.lock_outline_rounded, size: 14, color: AppColors.textSecondary),
-                      ],
+                        child: Row(
+                          children: [
+                            const Icon(Icons.directions_car_filled_rounded, size: 18, color: AppColors.textSecondary),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: vehicle == null
+                                  ? const Text('Select your jeepney (plate number)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.black54))
+                                  : Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(vehicle.plateNumber, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: AppColors.textPrimary)),
+                                        Text(
+                                          'Seating capacity: ${vehicle.seatingCapacity} passengers',
+                                          style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600, color: Colors.black54),
+                                        ),
+                                      ],
+                                    ),
+                            ),
+                            const Icon(Icons.keyboard_arrow_down_rounded, size: 20, color: AppColors.textSecondary),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
+                  if (_statusError != null)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 6),
+                      child: Text(
+                        "Couldn't check your trip status — the server will still verify when you start.",
+                        style: TextStyle(fontSize: 10.5, color: Colors.black45),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -380,7 +481,7 @@ class _DriverStartTripScreenState extends State<DriverStartTripScreen> {
                 width: double.infinity,
                 height: 52,
                 child: ElevatedButton(
-                  onPressed: _starting ? null : _confirm,
+                  onPressed: (_starting || _blocked) ? null : _confirm,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primary,
                     elevation: 0,

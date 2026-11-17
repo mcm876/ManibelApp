@@ -15,6 +15,7 @@ import '../../../core/services/user_session.dart';
 import '../../../core/utils/distance_format.dart';
 import '../../../core/utils/live_location.dart';
 import '../../../core/utils/location_settings.dart';
+import '../widgets/boarding_verification_dialog.dart';
 import '../../../core/widgets/app_avatar.dart';
 import 'commuter_history_screen.dart';
 import 'notifications_screen.dart';
@@ -852,37 +853,26 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
   // was a real bug, not just a cosmetic one.
   Future<void> _boardByTripId(_JeepneyOption jeepney) async {
     if (jeepney.tripId == null) return;
-    final here = _userLocation;
-    if (here == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Waiting for your GPS location — try again in a moment.')),
-      );
-      return;
-    }
     setState(() => _selectedJeepney = jeepney);
 
-    try {
-      final boardResponse = await ApiClient.post(
-        '/api/commuter/board',
-        {
-          'tripId': jeepney.tripId,
-          'lat': here.latitude,
-          'lng': here.longitude,
-          'riders': _totalRiders,
-        },
-        token: UserSession.instance.authToken,
-      );
-      _boardedTripId = jeepney.tripId;
-      _boardedBoardingId = boardResponse['boardingId'] as String?;
-      if (!mounted) return;
-      _simulateQrScan();
-    } on ApiException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+    // Board only opens a request: the server confirms it from fresh GPS
+    // readings, and the commuter isn't counted until it does. Anything short
+    // of CONFIRMED comes back null (and they were told why in the dialog).
+    final result = await showBoardingVerification(
+      context,
+      tripId: jeepney.tripId,
+      riders: _totalRiders,
+    );
+    if (!mounted) return;
+    if (result == null) {
       // Resume watching rather than leaving the commuter stuck with
       // polling stopped and no path forward except manually backing out.
       _startFindingJeepneys();
+      return;
     }
+    _boardedTripId = result.tripId ?? jeepney.tripId;
+    _boardedBoardingId = result.boardingId;
+    _simulateQrScan();
   }
 
   // Opens the real camera scanner, then verifies whatever it decoded
@@ -939,27 +929,17 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
       // entry, no fare, and their demand signal (see fulfilledAt's doc
       // comment in schema.prisma) staying stuck as "still waiting"
       // forever since the thing that clears it never ran.
-      final here = _userLocation;
-      if (here == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Waiting for your GPS location — try again in a moment.')),
-        );
-        return;
-      }
-      final boardResponse = await ApiClient.post(
-        '/api/commuter/board',
-        {
-          'qrToken': token,
-          'lat': here.latitude,
-          'lng': here.longitude,
-          'riders': _totalRiders,
-        },
-        token: UserSession.instance.authToken,
+      // The QR identifies the jeepney; being next to it is still verified by
+      // GPS before the commuter is counted (see showBoardingVerification).
+      final result = await showBoardingVerification(
+        context,
+        qrToken: token,
+        riders: _totalRiders,
       );
-      _boardedTripId = boardResponse['tripId'] as String?;
-      _boardedBoardingId = boardResponse['boardingId'] as String?;
+      if (!mounted || result == null) return;
+      _boardedTripId = result.tripId;
+      _boardedBoardingId = result.boardingId;
 
-      if (!mounted) return;
       _simulateQrScan();
     } on ApiException catch (e) {
       if (!mounted) return;

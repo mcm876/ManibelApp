@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { AuthProvider, ProtectedRoute } from './lib/auth';
+import { Navigate } from 'react-router-dom';
+import { AuthProvider, ProtectedRoute, useAuth, type AdminRole } from './lib/auth';
 import LoginPage from './pages/LoginPage';
 import ForgotPasswordPage from './pages/ForgotPasswordPage';
 import DashboardPage from './pages/DashboardPage';
@@ -16,6 +17,22 @@ import IncidentReportsPage from './pages/IncidentReportsPage';
 import ReportsPage from './pages/ReportsPage';
 import SettingsPage from './pages/SettingsPage';
 import AppContentPage from './pages/AppContentPage';
+import OperationsPage from './pages/OperationsPage';
+import FleetPage from './pages/FleetPage';
+import ShortTrippingPage from './pages/ShortTrippingPage';
+import FleetReportsPage from './pages/FleetReportsPage';
+
+// Pages built for administrators/MANIBELA that return every operator's data —
+// operators are fenced out here and, independently, on the backend.
+const NOT_OPERATOR: AdminRole[] = ['MAIN_ADMIN', 'ADMIN', 'MANIBELA'];
+const ADMIN_LEVEL: AdminRole[] = ['MAIN_ADMIN', 'ADMIN'];
+
+function Home() {
+  const { admin } = useAuth();
+  // Operators have no association-wide dashboard; their home is Operations.
+  if (admin?.role === 'OPERATOR') return <Navigate to="/operations" replace />;
+  return <DashboardPage />;
+}
 
 export default function App() {
   return (
@@ -29,14 +46,46 @@ export default function App() {
             path="/"
             element={
               <ProtectedRoute>
-                <DashboardPage />
+                <Home />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/operations"
+            element={
+              <ProtectedRoute>
+                <OperationsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/fleet"
+            element={
+              <ProtectedRoute>
+                <FleetPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/short-tripping"
+            element={
+              <ProtectedRoute>
+                <ShortTrippingPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/fleet-reports"
+            element={
+              <ProtectedRoute>
+                <FleetReportsPage />
               </ProtectedRoute>
             }
           />
           <Route
             path="/jeepney-monitoring"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute roles={NOT_OPERATOR}>
                 <JeepneyMonitoringPage />
               </ProtectedRoute>
             }
@@ -44,7 +93,7 @@ export default function App() {
           <Route
             path="/jeepney-monitoring/map"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute roles={NOT_OPERATOR}>
                 <JeepneyLiveMapPage />
               </ProtectedRoute>
             }
@@ -52,7 +101,7 @@ export default function App() {
           <Route
             path="/jeepney-monitoring/history"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute roles={NOT_OPERATOR}>
                 <TripHistoryPage />
               </ProtectedRoute>
             }
@@ -60,7 +109,7 @@ export default function App() {
           <Route
             path="/passenger-monitoring"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute roles={NOT_OPERATOR}>
                 <PassengerMonitoringPage />
               </ProtectedRoute>
             }
@@ -68,7 +117,7 @@ export default function App() {
           <Route
             path="/passenger-monitoring/map"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute roles={NOT_OPERATOR}>
                 <PassengerLiveMapPage />
               </ProtectedRoute>
             }
@@ -76,7 +125,7 @@ export default function App() {
           <Route
             path="/drivers"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute roles={NOT_OPERATOR}>
                 <DriversPage />
               </ProtectedRoute>
             }
@@ -84,7 +133,7 @@ export default function App() {
           <Route
             path="/commuters"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute roles={NOT_OPERATOR}>
                 <CommutersPage />
               </ProtectedRoute>
             }
@@ -92,7 +141,7 @@ export default function App() {
           <Route
             path="/commuters/:id"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute roles={NOT_OPERATOR}>
                 <CommuterDetailPage />
               </ProtectedRoute>
             }
@@ -100,7 +149,7 @@ export default function App() {
           <Route
             path="/id-verification"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute roles={NOT_OPERATOR}>
                 <IdVerificationPage />
               </ProtectedRoute>
             }
@@ -116,7 +165,7 @@ export default function App() {
           <Route
             path="/reports"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute roles={NOT_OPERATOR}>
                 <ReportsPage />
               </ProtectedRoute>
             }
@@ -124,7 +173,7 @@ export default function App() {
           <Route
             path="/app-content"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute roles={ADMIN_LEVEL}>
                 <AppContentPage />
               </ProtectedRoute>
             }

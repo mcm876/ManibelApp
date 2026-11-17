@@ -14,6 +14,7 @@ const List<String> _complaintTypes = [
   'Overcharging',
   'Rude Behavior',
   'Route Deviation',
+  'Short-Tripping',
   'Other',
 ];
 

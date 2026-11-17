@@ -29,6 +29,7 @@ export const NAVIGABLE_ADMIN_NOTIFICATION_TYPES = new Set([
   'TRIP_EXPLANATION_SUBMITTED',
   'ID_VERIFICATION_SUBMITTED',
   'COMPLAINT_FILED',
+  'SHORT_TRIP_INCIDENT',
 ]);
 
 /** Where tapping a notification should navigate to, keyed by its type —
@@ -49,6 +50,9 @@ export function adminNotificationPath(n: Pick<AdminNotification, 'type' | 'refer
     case 'COMPLAINT_FILED':
       // referenceId is a Complaint id.
       return `/incident-reports?complaintId=${n.referenceId}`;
+    case 'SHORT_TRIP_INCIDENT':
+      // referenceId is a Driver id.
+      return `/short-tripping?driverId=${n.referenceId}`;
     default:
       return null;
   }
@@ -62,7 +66,7 @@ export function adminNotificationPath(n: Pick<AdminNotification, 'type' | 'refer
  * responsive header, and calling this from there would mean two
  * independent pollers each popping their own toast for the same event.
  */
-export function useAdminNotificationFeed() {
+export function useAdminNotificationFeed(enabled = true) {
   // Page 1 — kept live by polling, drives the badge/toasts, exactly as
   // before. [extra] holds anything loaded via "Load More" beyond it —
   // kept separate so polling page 1 doesn't need to re-fetch (and
@@ -92,6 +96,9 @@ export function useAdminNotificationFeed() {
   };
 
   const fetchNotifications = () => {
+    // Operators get no feed: it broadcasts to every admin, so it would show
+    // them other operators' drivers. The backend refuses it for them too.
+    if (!enabled) return;
     apiClient
       .get<{ notifications: AdminNotification[]; hasNextPage: boolean }>(
         `/api/admin/notifications?page=1&pageSize=${PAGE_SIZE}`,

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
+import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 
 import { prisma } from '../lib/prisma';
@@ -18,6 +19,8 @@ import { authLimiter } from '../middleware/rateLimit';
 import { compareFaces, fetchImageBuffer, FACE_MATCH_AUTO_CLEAR_SCORE } from '../lib/faceMatch';
 import { distanceMeters, estimateEtaMinutes } from '../utils/geo';
 import { getRoute } from '../lib/routingService';
+import { bumpPeakOccupancy, getOccupancy, lockTrip } from '../lib/occupancy';
+import { getActiveRestriction, toPublicRestriction } from '../lib/restrictions';
 
 const router = Router();
 
@@ -66,6 +69,9 @@ function toPublicTrip(trip: {
   endedAt: Date | null;
   startingOdometer?: number | null;
   plateNumber?: string | null;
+  vehicleId?: string | null;
+  capacitySnapshot?: number | null;
+  manualPassengers?: number;
   isShortTrip: boolean;
   flagReason: string | null;
   driverExplanation: string | null;
@@ -85,6 +91,9 @@ function toPublicTrip(trip: {
     endedAt: trip.endedAt,
     startingOdometer: trip.startingOdometer ?? null,
     plateNumber: trip.plateNumber ?? null,
+    vehicleId: trip.vehicleId ?? null,
+    capacitySnapshot: trip.capacitySnapshot ?? null,
+    manualPassengers: trip.manualPassengers ?? 0,
     isShortTrip: trip.isShortTrip,
     flagReason: trip.flagReason,
     driverExplanation: trip.driverExplanation,
@@ -607,6 +616,10 @@ const startTripSchema = z
     // that is lower than the vehicle's last recorded reading (see the
     // ODOMETER_LOWER_THAN_LAST response below).
     confirmLowerOdometer: z.boolean().optional(),
+    // Which of the driver's assigned jeepneys they are driving. Required to
+    // start a NEW trip; ignored when resuming one already ACTIVE (a trip's
+    // vehicle can never change).
+    vehicleId: z.string().trim().min(1).optional(),
   })
   .refine((body) => (body.lat === undefined) === (body.lng === undefined), {
     message: 'lat and lng must be sent together.',
@@ -646,7 +659,68 @@ router.post('/trips/start', requireAuth('driver'), async (req, res, next) => {
             data: { currentLat: body.lat, currentLng: body.lng, locationUpdatedAt: new Date() },
           })
         : existingActive;
-      res.json({ trip: toPublicTrip(resumed) });
+      res.json({ trip: toPublicTrip(resumed), occupancy: await getOccupancy(prisma, resumed.id) });
+      return;
+    }
+
+    // Disciplinary gates — all judged on the server, from the database, so a
+    // logout, reinstall or second phone changes nothing. They only stop a NEW
+    // trip; one already ACTIVE (resumed above) is never cut off by them.
+    if (driver.disciplinaryStatus === 'SUSPENDED') {
+      res.status(403).json({
+        error: 'Your account is suspended from driving. Please contact your operator.',
+        code: 'DRIVER_SUSPENDED',
+      });
+      return;
+    }
+    const restriction = await getActiveRestriction(driver.id);
+    if (restriction) {
+      res.status(403).json({
+        error: 'You are temporarily restricted from starting a new trip.',
+        code: 'TRIP_RESTRICTED',
+        restriction: toPublicRestriction(restriction),
+      });
+      return;
+    }
+
+    // The vehicle must be one this driver is currently assigned to — the
+    // list the app shows comes from GET /vehicles, but this is what actually
+    // stops someone sending another jeepney's id.
+    if (!body.vehicleId) {
+      res.status(400).json({
+        error: 'Select the jeepney you are driving before starting a trip.',
+        code: 'VEHICLE_REQUIRED',
+      });
+      return;
+    }
+    const assignment = await prisma.driverVehicleAssignment.findFirst({
+      where: { driverId: driver.id, vehicleId: body.vehicleId, revokedAt: null },
+      include: { vehicle: true },
+    });
+    if (!assignment || !assignment.vehicle.isActive) {
+      res.status(403).json({
+        error: 'That jeepney is not assigned to you.',
+        code: 'VEHICLE_NOT_ASSIGNED',
+      });
+      return;
+    }
+    const vehicle = assignment.vehicle;
+    if (vehicle.seatingCapacity === null) {
+      res.status(409).json({
+        error: `Seating capacity for ${vehicle.plateNumber} has not been set yet. Ask your operator to enter it.`,
+        code: 'VEHICLE_CAPACITY_NOT_SET',
+      });
+      return;
+    }
+    const busy = await prisma.trip.findFirst({
+      where: { vehicleId: vehicle.id, status: 'ACTIVE' },
+      select: { id: true },
+    });
+    if (busy) {
+      res.status(409).json({
+        error: `${vehicle.plateNumber} is already on an active trip.`,
+        code: 'VEHICLE_IN_USE',
+      });
       return;
     }
 
@@ -666,7 +740,7 @@ router.post('/trips/start', requireAuth('driver'), async (req, res, next) => {
     // being a hard block that could lock a vehicle out of starting trips.
     if (!body.confirmLowerOdometer) {
       const previous = await prisma.trip.findFirst({
-        where: { plateNumber: driver.plateNumber, startingOdometer: { not: null } },
+        where: { plateNumber: vehicle.plateNumber, startingOdometer: { not: null } },
         orderBy: { startedAt: 'desc' },
         select: { startingOdometer: true },
       });
@@ -684,17 +758,35 @@ router.post('/trips/start', requireAuth('driver'), async (req, res, next) => {
     // that caused this, so they already know; a notification for it would
     // just be an echo. "Trip Completed" (below, in /trips/:id/end) stays,
     // since it doubles as a record that the trip was actually recorded.
-    const trip = await prisma.trip.create({
-      data: {
-        driverId: req.auth!.sub,
-        route: body.route ?? null,
-        startingOdometer: body.startingOdometer,
-        plateNumber: driver.plateNumber,
-        ...(hasLocation ? { currentLat: body.lat, currentLng: body.lng, locationUpdatedAt: new Date() } : {}),
-      },
-    });
+    let trip;
+    try {
+      trip = await prisma.trip.create({
+        data: {
+          driverId: req.auth!.sub,
+          route: body.route ?? null,
+          startingOdometer: body.startingOdometer,
+          plateNumber: vehicle.plateNumber,
+          vehicleId: vehicle.id,
+          capacitySnapshot: vehicle.seatingCapacity,
+          ...(hasLocation ? { currentLat: body.lat, currentLng: body.lng, locationUpdatedAt: new Date() } : {}),
+        },
+      });
+    } catch (err) {
+      // Two drivers raced for the same jeepney — the partial unique index on
+      // ACTIVE trips per vehicle lets exactly one through.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        res.status(409).json({ error: `${vehicle.plateNumber} is already on an active trip.`, code: 'VEHICLE_IN_USE' });
+        return;
+      }
+      throw err;
+    }
 
-    res.status(201).json({ trip: toPublicTrip(trip) });
+    // Starting to drive means operating — flips an INACTIVE driver back.
+    if (driver.operationalStatus !== 'ACTIVE') {
+      await prisma.driver.update({ where: { id: driver.id }, data: { operationalStatus: 'ACTIVE' } });
+    }
+
+    res.status(201).json({ trip: toPublicTrip(trip), occupancy: await getOccupancy(prisma, trip.id) });
   } catch (err) {
     next(err);
   }
@@ -705,7 +797,209 @@ router.get('/trips/active', requireAuth('driver'), async (req, res, next) => {
     const trip = await prisma.trip.findFirst({
       where: { driverId: req.auth!.sub, status: 'ACTIVE' },
     });
-    res.json({ trip: trip ? toPublicTrip(trip) : null });
+    res.json({
+      trip: trip ? toPublicTrip(trip) : null,
+      occupancy: trip ? await getOccupancy(prisma, trip.id) : null,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// VEHICLES — the jeepneys this driver is authorized to drive. Capacity comes
+// from the vehicle record, never assumed. `inUse` tells the app a jeepney is
+// already on an active trip (it can't be started again until that ends).
+// ---------------------------------------------------------------------------
+router.get('/vehicles', requireAuth('driver'), async (req, res, next) => {
+  try {
+    const assignments = await prisma.driverVehicleAssignment.findMany({
+      where: { driverId: req.auth!.sub, revokedAt: null, vehicle: { isActive: true } },
+      include: { vehicle: true },
+      orderBy: { assignedAt: 'asc' },
+    });
+    const activeTrips = await prisma.trip.findMany({
+      where: { vehicleId: { in: assignments.map((a) => a.vehicleId) }, status: 'ACTIVE' },
+      select: { vehicleId: true, driverId: true },
+    });
+    const inUse = new Map(activeTrips.map((t) => [t.vehicleId, t.driverId]));
+
+    res.json({
+      vehicles: assignments.map((a) => ({
+        id: a.vehicle.id,
+        plateNumber: a.vehicle.plateNumber,
+        seatingCapacity: a.vehicle.seatingCapacity,
+        capacityConfigured: a.vehicle.seatingCapacity !== null,
+        inUse: inUse.has(a.vehicleId),
+        inUseByMe: inUse.get(a.vehicleId) === req.auth!.sub,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// The caller's current trip-start restriction, if any (server time).
+router.get('/me/restriction', requireAuth('driver'), async (req, res, next) => {
+  try {
+    const driver = await prisma.driver.findUnique({
+      where: { id: req.auth!.sub },
+      select: { disciplinaryStatus: true, operationalStatus: true },
+    });
+    const restriction = await getActiveRestriction(req.auth!.sub);
+    const pendingExplanations = await prisma.shortTripIncident.count({
+      where: { driverId: req.auth!.sub, status: 'PENDING_EXPLANATION' },
+    });
+    res.json({
+      pendingExplanations,
+      restriction: restriction ? toPublicRestriction(restriction) : null,
+      disciplinaryStatus: driver?.disciplinaryStatus ?? 'NONE',
+      operationalStatus: driver?.operationalStatus ?? 'ACTIVE',
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PASSENGER COUNT — live occupancy plus the driver's manual +1/-1 for riders
+// who don't use the app. Every change is capacity-checked and audited, and
+// done under the trip's row lock so concurrent boardings can't overfill.
+// ---------------------------------------------------------------------------
+router.get('/trips/:id/occupancy', requireAuth('driver'), async (req, res, next) => {
+  try {
+    const id: string = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const trip = await prisma.trip.findUnique({ where: { id }, select: { driverId: true } });
+    if (!trip || trip.driverId !== req.auth!.sub) {
+      res.status(404).json({ error: 'Trip not found.' });
+      return;
+    }
+    res.json({ occupancy: await getOccupancy(prisma, id) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const manualPassengerSchema = z.object({
+  delta: z.union([z.literal(1), z.literal(-1)]),
+  // Idempotency key — a double tap / retried request changes the count once.
+  clientRequestId: z.string().trim().min(1).max(100).optional(),
+});
+
+router.post('/trips/:id/passengers', requireAuth('driver'), async (req, res, next) => {
+  try {
+    const id: string = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const body = manualPassengerSchema.parse(req.body);
+    const driverId = req.auth!.sub;
+
+    const result = await prisma.$transaction(async (tx) => {
+      await lockTrip(tx, id);
+      const trip = await tx.trip.findUnique({ where: { id } });
+      if (!trip || trip.driverId !== driverId) return { error: 404 as const };
+      if (trip.status !== 'ACTIVE') return { error: 'ENDED' as const };
+
+      if (body.clientRequestId) {
+        const dup = await tx.manualPassengerAdjustment.findUnique({
+          where: { driverId_clientRequestId: { driverId, clientRequestId: body.clientRequestId } },
+        });
+        if (dup) return { occupancy: await getOccupancy(tx, id), duplicate: true, adjustmentId: dup.id };
+      }
+
+      const before = await getOccupancy(tx, id);
+      if (!before) return { error: 404 as const };
+
+      if (body.delta === 1) {
+        if (trip.vehicleId && before.seatingCapacity === null) return { error: 'CAPACITY_UNKNOWN' as const };
+        if (before.seatingCapacity !== null && before.totalPassengers + 1 > before.seatingCapacity) {
+          return { error: 'FULL' as const, occupancy: before };
+        }
+      } else if (trip.manualPassengers <= 0) {
+        return { error: 'ZERO' as const, occupancy: before };
+      }
+
+      const updated = await tx.trip.update({
+        where: { id },
+        data: { manualPassengers: { increment: body.delta } },
+      });
+      const adjustment = await tx.manualPassengerAdjustment.create({
+        data: {
+          tripId: id,
+          vehicleId: trip.vehicleId,
+          driverId,
+          delta: body.delta,
+          countAfter: updated.manualPassengers,
+          clientRequestId: body.clientRequestId ?? null,
+        },
+      });
+      const after = await getOccupancy(tx, id);
+      if (after) await bumpPeakOccupancy(tx, id, after.totalPassengers);
+      return { occupancy: after, adjustmentId: adjustment.id };
+    });
+
+    if ('error' in result) {
+      if (result.error === 404) res.status(404).json({ error: 'Trip not found.' });
+      else if (result.error === 'ENDED') res.status(409).json({ error: 'This trip has already ended.', code: 'TRIP_ENDED' });
+      else if (result.error === 'CAPACITY_UNKNOWN')
+        res.status(409).json({ error: "This jeepney's seating capacity isn't set up yet.", code: 'CAPACITY_UNKNOWN' });
+      else if (result.error === 'FULL')
+        res.status(409).json({ error: 'The jeepney is full. No more passengers can be added.', code: 'JEEPNEY_FULL', occupancy: result.occupancy });
+      else
+        res.status(409).json({ error: 'There are no manually-counted passengers to remove.', code: 'MANUAL_COUNT_ZERO', occupancy: result.occupancy });
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Undo the most recent manual change (the fix for an accidental tap). Written
+// as a new, reversing row — the original stays in the audit trail. Only the
+// latest un-reversed change can be undone, and an undo can't be undone.
+router.post('/trips/:id/passengers/undo', requireAuth('driver'), async (req, res, next) => {
+  try {
+    const id: string = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const driverId = req.auth!.sub;
+
+    const result = await prisma.$transaction(async (tx) => {
+      await lockTrip(tx, id);
+      const trip = await tx.trip.findUnique({ where: { id } });
+      if (!trip || trip.driverId !== driverId) return { error: 404 as const };
+      if (trip.status !== 'ACTIVE') return { error: 'ENDED' as const };
+
+      const last = await tx.manualPassengerAdjustment.findFirst({
+        where: { tripId: id, undoOfId: null },
+        orderBy: { createdAt: 'desc' },
+      });
+      const alreadyUndone = last
+        ? await tx.manualPassengerAdjustment.findUnique({ where: { undoOfId: last.id } })
+        : null;
+      if (!last || alreadyUndone) return { error: 'NOTHING' as const };
+
+      const delta = -last.delta;
+      const before = await getOccupancy(tx, id);
+      if (!before) return { error: 404 as const };
+      if (delta === 1 && before.seatingCapacity !== null && before.totalPassengers + 1 > before.seatingCapacity) {
+        return { error: 'FULL' as const };
+      }
+      if (delta === -1 && trip.manualPassengers <= 0) return { error: 'NOTHING' as const };
+
+      const updated = await tx.trip.update({ where: { id }, data: { manualPassengers: { increment: delta } } });
+      await tx.manualPassengerAdjustment.create({
+        data: { tripId: id, vehicleId: trip.vehicleId, driverId, delta, countAfter: updated.manualPassengers, undoOfId: last.id },
+      });
+      return { occupancy: await getOccupancy(tx, id) };
+    });
+
+    if ('error' in result) {
+      if (result.error === 404) res.status(404).json({ error: 'Trip not found.' });
+      else if (result.error === 'ENDED') res.status(409).json({ error: 'This trip has already ended.', code: 'TRIP_ENDED' });
+      else if (result.error === 'FULL')
+        res.status(409).json({ error: 'Undoing that would put the jeepney over capacity.', code: 'JEEPNEY_FULL' });
+      else res.status(409).json({ error: 'Nothing to undo.', code: 'NOTHING_TO_UNDO' });
+      return;
+    }
+    res.json(result);
   } catch (err) {
     next(err);
   }
@@ -774,6 +1068,17 @@ router.post('/trips/:id/end', requireAuth('driver'), async (req, res, next) => {
     res.json({ trip: toPublicTrip(updated) });
 
     try {
+      // Boarding verifications still waiting on this trip can never complete.
+      await prisma.boardingRequest.updateMany({
+        where: { tripId: id, status: 'PENDING' },
+        data: {
+          status: 'FAILED',
+          failureCode: 'TRIP_ENDED',
+          failureMessage: "This jeepney's trip has ended.",
+          resolvedAt: endedAt,
+        },
+      });
+
       // A commuter still marked onboard when the *driver* ends the trip
       // (as opposed to tapping their own "Para Po"/End Trip — see POST
       // /api/commuter/alight) would otherwise stay stuck with alightedAt
@@ -982,6 +1287,144 @@ router.patch('/trips/:id/explanation', requireAuth('driver'), async (req, res, n
     });
 
     res.json({ trip: toPublicTrip(updated) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// DAYS NOT OPERATED — whether a driver operated on a day is read from their
+// real trips; this only records a *reason* for a past/current day with no
+// trip at all, and only if the reporting workflow is in use.
+// ---------------------------------------------------------------------------
+const nonOperationSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD'),
+  reason: z.string().trim().min(3, 'Please give a short reason.').max(500),
+});
+
+router.put('/non-operation', requireAuth('driver'), async (req, res, next) => {
+  try {
+    const body = nonOperationSchema.parse(req.body);
+    const today = manilaDayKey(new Date());
+    if (body.date > today) {
+      res.status(400).json({ error: "You can't give a reason for a day that hasn't happened yet." });
+      return;
+    }
+    const start = manilaMidnight(body.date);
+    const tripThatDay = await prisma.trip.findFirst({
+      where: { driverId: req.auth!.sub, startedAt: { gte: start, lt: new Date(start.getTime() + 86_400_000) } },
+      select: { id: true },
+    });
+    if (tripThatDay) {
+      res.status(409).json({ error: 'You have a trip recorded on that day, so it counts as a day you operated.' });
+      return;
+    }
+    const date = new Date(`${body.date}T00:00:00Z`);
+    const row = await prisma.driverNonOperationDay.upsert({
+      where: { driverId_date: { driverId: req.auth!.sub, date } },
+      create: { driverId: req.auth!.sub, date, reason: body.reason },
+      update: { reason: body.reason },
+    });
+    res.json({ date: body.date, reason: row.reason });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/non-operation', requireAuth('driver'), async (req, res, next) => {
+  try {
+    const rows = await prisma.driverNonOperationDay.findMany({
+      where: { driverId: req.auth!.sub },
+      orderBy: { date: 'desc' },
+      take: 60,
+    });
+    res.json({ days: rows.map((r) => ({ date: formatDateOnly(r.date), reason: r.reason })) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// SHORT-TRIPPING INCIDENTS — the driver's side: see incidents raised against
+// them and explain. They can never edit status, delete, or touch anything
+// except their own explanation text (and only until a reviewer decides).
+// ---------------------------------------------------------------------------
+function toDriverIncident(i: {
+  id: string;
+  tripId: string | null;
+  route: string | null;
+  intendedDestination: string | null;
+  occurredAt: Date;
+  description: string | null;
+  status: string;
+  explanation: string | null;
+  explanationSubmittedAt: Date | null;
+  reviewNote: string | null;
+}) {
+  return {
+    id: i.id,
+    tripId: i.tripId,
+    route: i.route,
+    intendedDestination: i.intendedDestination,
+    occurredAt: i.occurredAt,
+    description: i.description,
+    status: i.status,
+    explanation: i.explanation,
+    explanationSubmittedAt: i.explanationSubmittedAt,
+    reviewNote: i.status === 'CONFIRMED' || i.status === 'DISMISSED' ? i.reviewNote : null,
+    needsExplanation: i.status === 'PENDING_EXPLANATION',
+    canExplain: ['PENDING_EXPLANATION', 'EXPLAINED', 'UNDER_REVIEW'].includes(i.status),
+  };
+}
+
+router.get('/short-trip-incidents', requireAuth('driver'), async (req, res, next) => {
+  try {
+    const incidents = await prisma.shortTripIncident.findMany({
+      where: { driverId: req.auth!.sub, status: { not: 'DUPLICATE' } },
+      orderBy: { occurredAt: 'desc' },
+      take: 50,
+    });
+    res.json({ incidents: incidents.map(toDriverIncident) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const incidentExplanationSchema = z.object({
+  explanation: z.string().trim().min(5, 'Please explain what happened (at least a few words).').max(2000),
+});
+
+router.patch('/short-trip-incidents/:id/explanation', requireAuth('driver'), async (req, res, next) => {
+  try {
+    const id: string = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const body = incidentExplanationSchema.parse(req.body);
+
+    const incident = await prisma.shortTripIncident.findUnique({ where: { id } });
+    if (!incident || incident.driverId !== req.auth!.sub) {
+      res.status(404).json({ error: 'Incident not found.' });
+      return;
+    }
+    if (!['PENDING_EXPLANATION', 'EXPLAINED', 'UNDER_REVIEW'].includes(incident.status)) {
+      res.status(409).json({ error: 'This incident has already been decided and can no longer be explained.' });
+      return;
+    }
+
+    const updated = await prisma.shortTripIncident.update({
+      where: { id },
+      data: {
+        explanation: body.explanation,
+        explanationSubmittedAt: new Date(),
+        status: incident.status === 'PENDING_EXPLANATION' ? 'EXPLAINED' : incident.status,
+      },
+    });
+    const driver = await prisma.driver.findUnique({ where: { id: req.auth!.sub }, select: { fullName: true, plateNumber: true } });
+    await notifyAdmin({
+      title: 'Short-tripping explanation submitted',
+      message: `${driver?.fullName ?? 'A driver'} explained a short-tripping report — needs review.`,
+      type: 'SHORT_TRIP_INCIDENT',
+      referenceId: req.auth!.sub,
+    });
+    res.json({ incident: toDriverIncident(updated) });
   } catch (err) {
     next(err);
   }

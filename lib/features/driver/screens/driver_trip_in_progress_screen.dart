@@ -13,6 +13,7 @@ import '../../../core/services/driver_session.dart';
 import '../../../core/services/today_start_odometer.dart';
 import '../../../core/utils/live_location.dart';
 import '../../../core/utils/location_settings.dart';
+import '../widgets/passenger_count_panel.dart';
 import '../widgets/passenger_info_sheet.dart';
 
 /// ---------------------------------------------------------------------------
@@ -73,6 +74,12 @@ class DriverActiveTrip {
   String? locationError;
   bool isLocationErrorServiceDisabled = false;
 
+  /// The jeepney (Vehicle.id) this trip runs on and its registered seating
+  /// capacity — chosen by the driver before the trip started and fixed for the
+  /// whole trip.
+  String? vehicleId;
+  int? seatingCapacity;
+
   /// The backend Trip this local trip is mirrored to — null if the
   /// start-trip call failed (bad connectivity shouldn't block a driver
   /// from working locally) or hasn't happened yet. Location pings and
@@ -125,6 +132,8 @@ class DriverActiveTrip {
     required DateTime startTime,
     required LatLng initialLocation,
     required double startingOdometer,
+    required String vehicleId,
+    int? seatingCapacity,
     bool confirmLowerOdometer = false,
     bool initialLocationIsReal = false,
   }) async {
@@ -136,6 +145,7 @@ class DriverActiveTrip {
     final sendLocation = initialLocationIsReal;
     final response = await ApiClient.post('/api/driver/trips/start', {
       'route': route,
+      'vehicleId': vehicleId,
       'startingOdometer': startingOdometer,
       if (confirmLowerOdometer) 'confirmLowerOdometer': true,
       if (sendLocation) 'lat': initialLocation.latitude,
@@ -145,6 +155,8 @@ class DriverActiveTrip {
 
     this.route = route;
     this.plateNumber = plateNumber;
+    this.vehicleId = trip['vehicleId'] as String? ?? vehicleId;
+    this.seatingCapacity = (trip['capacitySnapshot'] as num?)?.toInt() ?? seatingCapacity;
     // The backend's own start timestamp, so the timer and the stored trip
     // agree on when it began.
     this.startTime =
@@ -179,10 +191,14 @@ class DriverActiveTrip {
     required String plateNumber,
     required DateTime startTime,
     LatLng? lastKnownLocation,
+    String? vehicleId,
+    int? seatingCapacity,
   }) async {
     if (isActive) return;
 
     this.route = route;
+    this.vehicleId = vehicleId;
+    this.seatingCapacity = seatingCapacity;
     this.plateNumber = plateNumber;
     this.startTime = startTime;
     endTime = null;
@@ -1110,7 +1126,7 @@ class _DriverTripInProgressScreenState
               if (!_followingDriver)
                 Positioned(
                   right: 16,
-                  bottom: 96,
+                  bottom: _activeTrip.backendTripId != null ? 330 : 96,
                   child: SafeArea(
                     top: false,
                     child: Material(
@@ -1130,6 +1146,20 @@ class _DriverTripInProgressScreenState
                         ),
                       ),
                     ),
+                  ),
+                ),
+
+              // =============================================================
+              // PASSENGER COUNT — app + manual passengers vs. seating capacity
+              // =============================================================
+              if (_activeTrip.backendTripId != null)
+                Positioned(
+                  left: 16,
+                  right: 16,
+                  bottom: 92,
+                  child: SafeArea(
+                    top: false,
+                    child: PassengerCountPanel(tripId: _activeTrip.backendTripId!),
                   ),
                 ),
 

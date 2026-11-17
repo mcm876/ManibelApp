@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { apiClient, ApiError } from '../lib/apiClient';
 import { formatManilaDateTime } from '../lib/formatDate';
-import { ComplaintStatusBadge, type ComplaintStatus } from './ComplaintStatusBadge';
+import { COMPLAINT_STATUS_LABELS, ComplaintStatusBadge, type ComplaintStatus } from './ComplaintStatusBadge';
 
 interface ComplaintDetail {
   id: string;
@@ -14,6 +14,11 @@ interface ComplaintDetail {
   description: string;
   attachmentUrl: string | null;
   status: ComplaintStatus;
+  investigationNotes: string | null;
+  actionTaken: string | null;
+  sanction: string | null;
+  resolution: string | null;
+  reviewedAt: string | null;
   createdAt: string;
 }
 
@@ -37,20 +42,47 @@ export function ComplaintDetailPanel({
   const [complaint, setComplaint] = useState<ComplaintDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // The review record — what was looked into, what was done, any sanction an
+  // authorized person approved, and how it ended. Saved together with the status.
+  const [investigationNotes, setInvestigationNotes] = useState('');
+  const [actionTaken, setActionTaken] = useState('');
+  const [sanction, setSanction] = useState('');
+  const [resolution, setResolution] = useState('');
 
   useEffect(() => {
     setComplaint(null);
     apiClient
       .get<{ complaint: ComplaintDetail }>(`/api/admin/complaints/${complaintId}`)
-      .then((res) => setComplaint(res.complaint))
+      .then((res) => {
+        setComplaint(res.complaint);
+        setInvestigationNotes(res.complaint.investigationNotes ?? '');
+        setActionTaken(res.complaint.actionTaken ?? '');
+        setSanction(res.complaint.sanction ?? '');
+        setResolution(res.complaint.resolution ?? '');
+      })
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load this complaint.'));
   }, [complaintId]);
 
   async function handleSetStatus(status: 'INVESTIGATING' | 'RESOLVED' | 'REJECTED') {
     if (!complaint || isSubmitting) return;
+    if (status === 'RESOLVED' && !resolution.trim()) {
+      setError('Please record how this was resolved first.');
+      return;
+    }
+    if (status === 'REJECTED' && !resolution.trim() && !investigationNotes.trim()) {
+      setError('Please record why this complaint is being dismissed first.');
+      return;
+    }
+    setError(null);
     setIsSubmitting(true);
     try {
-      await apiClient.patch(`/api/admin/complaints/${complaint.id}/status`, { status });
+      await apiClient.patch(`/api/admin/complaints/${complaint.id}/status`, {
+        status,
+        investigationNotes,
+        actionTaken,
+        sanction,
+        resolution,
+      });
       setComplaint({ ...complaint, status });
       onStatusChange(status);
     } catch (err) {
@@ -141,27 +173,55 @@ export function ComplaintDetailPanel({
               </dl>
             </div>
 
+            <div>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400">Review record</h3>
+              <div className="mt-2 space-y-3">
+                {(
+                  [
+                    ['Investigation details', investigationNotes, setInvestigationNotes, 'What was looked into and found'],
+                    ['Action taken', actionTaken, setActionTaken, 'e.g. spoke to the driver, issued a reminder'],
+                    ['Approved sanction (if any)', sanction, setSanction, 'Only record a sanction that authorized personnel approved'],
+                    ['Resolution', resolution, setResolution, 'How this ended'],
+                  ] as const
+                ).map(([label, value, set, placeholder]) => (
+                  <label key={label} className="block text-xs font-medium text-gray-600">
+                    {label}
+                    <textarea
+                      value={value}
+                      onChange={(e) => set(e.target.value)}
+                      rows={2}
+                      placeholder={placeholder}
+                      className="mt-1 w-full rounded-lg border border-border-subtle px-3 py-2 text-sm text-gray-900 focus:border-brand-blue focus:outline-none"
+                    />
+                  </label>
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-gray-400">
+                A complaint never changes the driver's status by itself. Multiple complaints trigger a review, not automatic action — disciplinary status is changed separately under Fleet → Drivers.
+              </p>
+            </div>
+
             <div className="mt-auto grid grid-cols-3 gap-2 pt-2">
               <button
                 onClick={() => handleSetStatus('INVESTIGATING')}
                 disabled={isSubmitting || complaint.status === 'INVESTIGATING'}
                 className="rounded-lg border border-brand-blue py-2 text-xs font-semibold text-brand-blue transition hover:bg-yellow-50 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                Investigating
+                {COMPLAINT_STATUS_LABELS.INVESTIGATING}
               </button>
               <button
                 onClick={() => handleSetStatus('RESOLVED')}
                 disabled={isSubmitting || complaint.status === 'RESOLVED'}
                 className="rounded-lg border border-status-good py-2 text-xs font-semibold text-status-good transition hover:bg-status-good-bg disabled:cursor-not-allowed disabled:opacity-50"
               >
-                Resolved
+                {COMPLAINT_STATUS_LABELS.RESOLVED}
               </button>
               <button
                 onClick={() => handleSetStatus('REJECTED')}
                 disabled={isSubmitting || complaint.status === 'REJECTED'}
                 className="rounded-lg border border-status-critical py-2 text-xs font-semibold text-status-critical transition hover:bg-status-critical-bg disabled:cursor-not-allowed disabled:opacity-50"
               >
-                Rejected
+                {COMPLAINT_STATUS_LABELS.REJECTED}
               </button>
             </div>
           </div>
