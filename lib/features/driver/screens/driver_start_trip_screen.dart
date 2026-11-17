@@ -66,6 +66,11 @@ class _DriverStartTripScreenState extends State<DriverStartTripScreen> {
   // explicitly every time, never remembered from a previous trip.
   DriverVehicle? _vehicle;
 
+  // The driver's assigned jeepneys (null until loaded, or if the load
+  // failed — then the picker below still works as the fallback). With
+  // exactly one, it's selected automatically and no question is asked.
+  List<DriverVehicle>? _vehicles;
+
   // Suspension / temporary restriction, from the server (null until loaded).
   DriverStatusInfo? _status;
   String? _statusError;
@@ -83,6 +88,7 @@ class _DriverStartTripScreenState extends State<DriverStartTripScreen> {
     super.initState();
     _fetchDemandSignals();
     _loadStatus();
+    _loadVehicles();
     _demandPollTimer = Timer.periodic(const Duration(seconds: 15), (_) => _fetchDemandSignals());
   }
 
@@ -98,6 +104,19 @@ class _DriverStartTripScreenState extends State<DriverStartTripScreen> {
       if (!mounted) return;
       // Not fatal — the server still enforces any restriction on Start.
       setState(() => _statusError = e.message);
+    }
+  }
+
+  Future<void> _loadVehicles() async {
+    try {
+      final list = await FleetApi.fetchVehicles();
+      if (!mounted) return;
+      setState(() {
+        _vehicles = list;
+        if (list.length == 1 && list.first.canStart) _vehicle = list.first;
+      });
+    } on ApiException {
+      // Leave _vehicles null: the picker sheet reports the error itself.
     }
   }
 
@@ -163,8 +182,13 @@ class _DriverStartTripScreenState extends State<DriverStartTripScreen> {
 
     final vehicle = _vehicle;
     if (vehicle == null) {
+      final noneAssigned = _vehicles != null && _vehicles!.isEmpty;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select the jeepney you are driving.')),
+        SnackBar(
+          content: Text(noneAssigned
+              ? 'You cannot start a trip until a jeepney is assigned to you.'
+              : 'Please select the jeepney you are driving.'),
+        ),
       );
       return;
     }
@@ -262,6 +286,66 @@ class _DriverStartTripScreenState extends State<DriverStartTripScreen> {
     );
   }
 
+  Widget _vehicleNotice(String title, String text) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF1F1),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFF5B5B5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Color(0xFF7A1F1F))),
+          const SizedBox(height: 2),
+          Text(text, style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: Color(0xFF7A1F1F))),
+        ],
+      ),
+    );
+  }
+
+  /// The driver's only jeepney — chosen automatically, so it's shown as
+  /// information rather than as a question.
+  Widget _singleVehicleCard(DriverVehicle v) {
+    if (!v.canStart) {
+      return _vehicleNotice(
+        v.plateNumber,
+        v.seatingCapacity == null
+            ? 'Seating capacity is not set for this jeepney yet. Ask your operator to set it before you start a trip.'
+            : 'This jeepney is already on an active trip.',
+      );
+    }
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF2F2F3),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE6E6E7)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.directions_car_filled_rounded, size: 18, color: AppColors.textSecondary),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(v.plateNumber, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: AppColors.textPrimary)),
+                Text(
+                  'Your jeepney · Seating capacity: ${v.seatingCapacity} passengers',
+                  style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600, color: Colors.black54),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final vehicle = _vehicle;
@@ -323,48 +407,57 @@ class _DriverStartTripScreenState extends State<DriverStartTripScreen> {
                     ),
                     const SizedBox(height: 10),
                   ],
-                  const Text(
-                    'Which jeepney are you currently driving?',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
-                  ),
-                  const SizedBox(height: 8),
-                  Material(
-                    color: const Color(0xFFF2F2F3),
-                    borderRadius: BorderRadius.circular(14),
-                    child: InkWell(
+                  if (_vehicles != null && _vehicles!.isEmpty)
+                    _vehicleNotice(
+                      'No jeepney assigned to you',
+                      'You cannot start a trip until a jeepney is assigned to you. Please contact your operator.',
+                    )
+                  else if (_vehicles != null && _vehicles!.length == 1)
+                    _singleVehicleCard(_vehicles!.first)
+                  else ...[
+                    const Text(
+                      'Which jeepney are you currently driving?',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 8),
+                    Material(
+                      color: const Color(0xFFF2F2F3),
                       borderRadius: BorderRadius.circular(14),
-                      onTap: _starting ? null : _pickVehicle,
-                      child: Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: vehicle == null ? AppColors.primary : const Color(0xFFE6E6E7), width: vehicle == null ? 1.5 : 1),
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.directions_car_filled_rounded, size: 18, color: AppColors.textSecondary),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: vehicle == null
-                                  ? const Text('Select your jeepney (plate number)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.black54))
-                                  : Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(vehicle.plateNumber, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: AppColors.textPrimary)),
-                                        Text(
-                                          'Seating capacity: ${vehicle.seatingCapacity} passengers',
-                                          style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600, color: Colors.black54),
-                                        ),
-                                      ],
-                                    ),
-                            ),
-                            const Icon(Icons.keyboard_arrow_down_rounded, size: 20, color: AppColors.textSecondary),
-                          ],
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(14),
+                        onTap: _starting ? null : _pickVehicle,
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: vehicle == null ? AppColors.primary : const Color(0xFFE6E6E7), width: vehicle == null ? 1.5 : 1),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.directions_car_filled_rounded, size: 18, color: AppColors.textSecondary),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: vehicle == null
+                                    ? const Text('Select your jeepney (plate number)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.black54))
+                                    : Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(vehicle.plateNumber, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: AppColors.textPrimary)),
+                                          Text(
+                                            'Seating capacity: ${vehicle.seatingCapacity} passengers',
+                                            style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600, color: Colors.black54),
+                                          ),
+                                        ],
+                                      ),
+                              ),
+                              const Icon(Icons.keyboard_arrow_down_rounded, size: 20, color: AppColors.textSecondary),
+                            ],
+                          ),
                         ),
                       ),
                     ),
-                  ),
+                  ],
                   if (_statusError != null)
                     const Padding(
                       padding: EdgeInsets.only(top: 6),

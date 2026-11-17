@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { LogoMark } from './Logo';
 import { LogoutConfirmDialog } from './LogoutConfirmDialog';
@@ -234,22 +234,6 @@ function navItemsFor(role?: AdminRole): NavItem[] {
   return navItems.filter((item) => !item.roles || (role !== undefined && item.roles.includes(role)));
 }
 
-// Precomputed pixel offsets for the sliding active-indicator below — kept
-// in sync with each row's actual height (h-11 = 44px), the flex gap
-// between rows (gap-0.5 = 2px), and the extra top margin a groupStart
-// row gets (mt-3.5 = 14px). Static data, so this only needs to run once
-// at module load, not on every render.
-const ROW_HEIGHT = 44;
-const ROW_GAP = 2;
-const GROUP_GAP_EXTRA = 14;
-function computeNavOffsets(items: NavItem[]): number[] {
-  let y = 0;
-  return items.map((item, i) => {
-    if (i > 0) y += ROW_HEIGHT + ROW_GAP + (item.groupStart ? GROUP_GAP_EXTRA : 0);
-    return y;
-  });
-}
-
 function isNavItemActive(pathname: string, to: string, end: boolean): boolean {
   return end ? pathname === to : pathname === to || pathname.startsWith(`${to}/`);
 }
@@ -259,8 +243,26 @@ function SidebarContent({ onNavigate, collapsed = false }: { onNavigate?: () => 
   const [confirmingLogout, setConfirmingLogout] = useState(false);
   const { pathname } = useLocation();
   const items = navItemsFor(admin?.role);
-  const navOffsets = computeNavOffsets(items);
   const activeIndex = items.findIndex(({ to, end }) => isNavItemActive(pathname, to, end));
+
+  // The sliding pill is positioned from the active row's real measured
+  // box, not from hard-coded row heights, so it always lines up with the
+  // item (whatever the role's item list, group spacing or font rendering).
+  const navRef = useRef<HTMLElement>(null);
+  const itemRefs = useRef<(HTMLAnchorElement | null)[]>([]);
+  const [pill, setPill] = useState<{ top: number; height: number } | null>(null);
+  useLayoutEffect(() => {
+    const measure = () => {
+      const el = itemRefs.current[activeIndex];
+      setPill(el ? { top: el.offsetTop, height: el.offsetHeight } : null);
+    };
+    measure();
+    const nav = navRef.current;
+    if (!nav || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(nav);
+    return () => observer.disconnect();
+  }, [activeIndex, items.length, collapsed]);
 
   return (
     <>
@@ -272,25 +274,28 @@ function SidebarContent({ onNavigate, collapsed = false }: { onNavigate?: () => 
         <LogoMark size={68} />
       </div>
 
-      <nav className="relative mt-2 flex flex-1 flex-col gap-0.5 overflow-y-auto px-3">
+      <nav ref={navRef} className="relative mt-2 flex flex-1 flex-col gap-0.5 overflow-y-auto px-3">
         {/* Sliding active-indicator — one shared pill that moves between
             rows instead of each row instantly swapping its own
             background, so navigating reads as continuous motion. */}
-        {activeIndex >= 0 && (
+        {pill && (
           <div
-            className="absolute left-3 right-3 h-11 rounded-lg bg-brand-blue shadow-sm transition-transform duration-300 ease-out"
-            style={{ transform: `translateY(${navOffsets[activeIndex]}px)` }}
+            className="absolute left-3 right-3 rounded-lg bg-brand-blue shadow-sm transition-[top,height] duration-300 ease-out"
+            style={{ top: pill.top, height: pill.height }}
           />
         )}
-        {items.map(({ to, label, icon: Icon, end, groupStart }) => (
+        {items.map(({ to, label, icon: Icon, end, groupStart }, i) => (
           <NavLink
             key={to}
+            ref={(el) => {
+              itemRefs.current[i] = el;
+            }}
             to={to}
             end={end}
             onClick={onNavigate}
             title={collapsed ? label : undefined}
             className={({ isActive }) =>
-              `relative z-10 flex h-11 items-center gap-3 rounded-lg px-3.5 text-sm font-medium transition-colors duration-150 ${
+              `relative z-10 flex h-11 shrink-0 items-center gap-3 rounded-lg px-3.5 text-sm font-medium transition-colors duration-150 ${
                 collapsed ? 'justify-center px-0' : ''
               } ${groupStart ? 'mt-3.5' : ''} ${
                 isActive ? 'text-white' : 'text-white/65 hover:bg-white/10 hover:text-white'
