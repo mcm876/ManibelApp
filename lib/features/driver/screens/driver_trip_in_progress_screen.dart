@@ -1008,7 +1008,7 @@ class _DriverTripInProgressScreenState
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
                                         style: const TextStyle(
-                                          fontSize: 14,
+                                          fontSize: 18,
                                           fontWeight: FontWeight.w800,
                                           color: AppColors.textPrimary,
                                         ),
@@ -1016,7 +1016,7 @@ class _DriverTripInProgressScreenState
                                       Text(
                                         plateNumber,
                                         style: const TextStyle(
-                                          fontSize: 10,
+                                          fontSize: 14,
                                           color: Colors.black54,
                                           fontWeight: FontWeight.w600,
                                         ),
@@ -1049,7 +1049,7 @@ class _DriverTripInProgressScreenState
                                         builder: (_, _, _) => Text(
                                           _activeTrip.elapsedLabel,
                                           style: const TextStyle(
-                                            fontSize: 12,
+                                            fontSize: 16,
                                             fontWeight: FontWeight.w800,
                                             color: Colors.green,
                                           ),
@@ -1106,7 +1106,7 @@ class _DriverTripInProgressScreenState
                                 child: Text(
                                   _activeTrip.locationError!,
                                   style: const TextStyle(
-                                    fontSize: 12,
+                                    fontSize: 14,
                                     fontWeight: FontWeight.w700,
                                     color: Color(0xFF7A1F1F),
                                   ),
@@ -1174,7 +1174,7 @@ class _DriverTripInProgressScreenState
                   top: false,
                   child: SizedBox(
                     width: double.infinity,
-                    height: 56,
+                    height: 64,
                     child: ElevatedButton.icon(
                       onPressed: _activeTrip.isEnding ? null : _handleEndTrip,
                       icon: _activeTrip.isEnding
@@ -1193,7 +1193,7 @@ class _DriverTripInProgressScreenState
                       label: Text(
                         _activeTrip.isEnding ? 'Ending trip…' : 'End Trip',
                         style: TextStyle(
-                          fontSize: 12,
+                          fontSize: 18,
                           fontWeight: FontWeight.w800,
                           color: Colors.white,
                         ),
@@ -1495,7 +1495,7 @@ class _DetailRow extends StatelessWidget {
         Text(
           label,
           style: const TextStyle(
-            fontSize: 12,
+            fontSize: 14,
             color: Colors.black45,
             fontWeight: FontWeight.w500,
           ),
@@ -1508,7 +1508,7 @@ class _DetailRow extends StatelessWidget {
             value,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(
-              fontSize: 12,
+              fontSize: 14,
               color: Colors.black87,
               fontWeight: FontWeight.w800,
             ),

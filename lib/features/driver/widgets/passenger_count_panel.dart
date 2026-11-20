@@ -154,7 +154,7 @@ class _PassengerCountPanelState extends State<PassengerCountPanel> {
                 children: [
                   const Icon(Icons.wifi_off_rounded, size: 18, color: Colors.black45),
                   const SizedBox(width: 8),
-                  const Text("Can't load passenger count", style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                  const Text("Can't load passenger count", style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                   TextButton(onPressed: _refresh, child: const Text('Retry')),
                 ],
               ),
@@ -177,14 +177,14 @@ class _PassengerCountPanelState extends State<PassengerCountPanel> {
       children: [
         Row(
           children: [
-            const Icon(Icons.groups_rounded, size: 18, color: AppColors.logoBlue),
+            const Icon(Icons.groups_rounded, size: 22, color: AppColors.logoBlue),
             const SizedBox(width: 8),
-            const Text('Passengers', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+            const Text('Passengers', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
             const Spacer(),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               decoration: BoxDecoration(color: chipBg, borderRadius: BorderRadius.circular(20)),
-              child: Text(chipText, style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w900, color: chipFg)),
+              child: Text(chipText, style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w900, color: chipFg)),
             ),
           ],
         ),
@@ -208,7 +208,7 @@ class _PassengerCountPanelState extends State<PassengerCountPanel> {
               isFull
                   ? 'Jeepney is FULL. No more passengers can be added, and app boardings are blocked.'
                   : 'Nearly full — only ${occ.remainingSeats ?? 0} seat${occ.remainingSeats == 1 ? '' : 's'} left.',
-              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: chipFg),
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: chipFg),
             ),
           ),
         ],
@@ -216,7 +216,7 @@ class _PassengerCountPanelState extends State<PassengerCountPanel> {
           const SizedBox(height: 6),
           const Text(
             'Offline — showing the last known count. It may be out of date.',
-            style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: AppColors.errorRed),
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.errorRed),
           ),
         ],
         const SizedBox(height: 10),
@@ -225,10 +225,10 @@ class _PassengerCountPanelState extends State<PassengerCountPanel> {
             Expanded(
               child: OutlinedButton.icon(
                 onPressed: (_busy || occ.manualPassengers <= 0) ? null : () => _adjust(-1),
-                icon: const Icon(Icons.remove_rounded, size: 18),
-                label: const Text('-1 Remove', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+                icon: const Icon(Icons.remove_rounded, size: 24),
+                label: const Text('-1 Remove', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
                 style: OutlinedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(44),
+                  minimumSize: const Size.fromHeight(60),
                   foregroundColor: AppColors.textPrimary,
                   side: const BorderSide(color: Color(0xFFD1D5DB)),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -240,10 +240,10 @@ class _PassengerCountPanelState extends State<PassengerCountPanel> {
               flex: 2,
               child: ElevatedButton.icon(
                 onPressed: (_busy || isFull) ? null : () => _adjust(1),
-                icon: const Icon(Icons.add_rounded, size: 18),
-                label: const Text('+1 Add Passenger', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+                icon: const Icon(Icons.add_rounded, size: 26),
+                label: const Text('+1 Add Passenger', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
                 style: ElevatedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(44),
+                  minimumSize: const Size.fromHeight(60),
                   backgroundColor: AppColors.primary,
                   foregroundColor: AppColors.onPrimary,
                   elevation: 0,
@@ -258,8 +258,8 @@ class _PassengerCountPanelState extends State<PassengerCountPanel> {
             alignment: Alignment.centerRight,
             child: TextButton.icon(
               onPressed: _busy ? null : _undo,
-              icon: const Icon(Icons.undo_rounded, size: 16),
-              label: const Text('Undo last change', style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800)),
+              icon: const Icon(Icons.undo_rounded, size: 20),
+              label: const Text('Undo last change', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800)),
             ),
           ),
       ],
@@ -282,13 +282,13 @@ class _Stat extends StatelessWidget {
           Text(
             value,
             style: TextStyle(
-              fontSize: emphasize ? 20 : 17,
+              fontSize: emphasize ? 30 : 22,
               fontWeight: FontWeight.w900,
               color: emphasize ? AppColors.logoBlue : AppColors.textPrimary,
             ),
           ),
           const SizedBox(height: 2),
-          Text(label, style: const TextStyle(fontSize: 9.5, fontWeight: FontWeight.w700, color: Colors.black54)),
+          Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.black54)),
         ],
       ),
     );

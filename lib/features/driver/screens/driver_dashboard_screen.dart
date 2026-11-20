@@ -775,7 +775,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                 ? _handleStartTrip
                 : () => _openTripInProgress(_activeTrip!),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 34, vertical: 20),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -786,7 +786,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                     color: _activeTrip == null
                         ? AppColors.onPrimary
                         : Colors.white,
-                    size: 24,
+                    size: 30,
                   ),
                   const SizedBox(width: 10),
                   Text(
@@ -795,7 +795,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                       color: _activeTrip == null
                           ? AppColors.onPrimary
                           : Colors.white,
-                      fontSize: 16,
+                      fontSize: 20,
                       fontWeight: FontWeight.w900,
                     ),
                   ),
@@ -824,7 +824,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                   RichText(
                     text: const TextSpan(
                       style: TextStyle(
-                        fontSize: 22,
+                        fontSize: 24,
                         fontWeight: FontWeight.bold,
                         fontFamily: 'Sans-Serif',
                       ),
@@ -918,7 +918,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                                   Text(
                                     _driverName,
                                     style: const TextStyle(
-                                      fontSize: 16,
+                                      fontSize: 20,
                                       fontWeight: FontWeight.bold,
                                       color: AppColors.onPrimary,
                                     ),
@@ -926,7 +926,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                                   Text(
                                     'Driver ID: $_driverId',
                                     style: const TextStyle(
-                                      fontSize: 10,
+                                      fontSize: 13,
                                       fontWeight: FontWeight.w600,
                                       color: AppColors.onPrimary,
                                     ),
@@ -963,7 +963,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                                   Text(
                                     _isOnline ? 'On Trip' : 'Offline',
                                     style: TextStyle(
-                                      fontSize: 12,
+                                      fontSize: 14,
                                       fontWeight: FontWeight.bold,
                                       color: _isOnline
                                           ? Colors.green.shade800
@@ -1014,7 +1014,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                               'Where Passengers Are Waiting',
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
-                                fontSize: 12,
+                                fontSize: 15,
                                 color: AppColors.textPrimary,
                               ),
                             ),
@@ -1036,7 +1036,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                                             ? 'Location error'
                                             : 'Live'),
                                   style: TextStyle(
-                                    fontSize: 12,
+                                    fontSize: 14,
                                     fontWeight: FontWeight.bold,
                                     color: _locatingInProgress
                                         ? Colors.orange.shade800
@@ -1082,7 +1082,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                                         ? 'Route: ${_activeTrip!.route}'
                                         : 'Tap to view live map',
                                     style: const TextStyle(
-                                      fontSize: 11,
+                                      fontSize: 13,
                                       fontWeight: FontWeight.bold,
                                       color: AppColors.textPrimary,
                                     ),
@@ -1114,7 +1114,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                                         'Tap to Expand',
                                         style: TextStyle(
                                           color: Colors.white,
-                                          fontSize: 11,
+                                          fontSize: 13,
                                           fontWeight: FontWeight.bold,
                                         ),
                                       ),
@@ -1253,7 +1253,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                   child: Text(
                     trip.route,
                     style: const TextStyle(
-                      fontSize: 15,
+                      fontSize: 18,
                       fontWeight: FontWeight.w800,
                       color: AppColors.textPrimary,
                     ),
@@ -1276,7 +1276,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                       Text(
                         'LIVE',
                         style: TextStyle(
-                          fontSize: 10,
+                          fontSize: 12,
                           fontWeight: FontWeight.w800,
                           color: Colors.green,
                         ),
@@ -1290,7 +1290,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
             Text(
               '${trip.plateNumber} · Started ${_timeOfDay(trip.startTime)}',
               style: const TextStyle(
-                fontSize: 12,
+                fontSize: 14,
                 color: Colors.black54,
                 fontWeight: FontWeight.w600,
               ),
@@ -1303,7 +1303,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                 Text(
                   'Tap to view live map and end trip',
                   style: TextStyle(
-                    fontSize: 10,
+                    fontSize: 13,
                     color: AppColors.logoBlue,
                     fontWeight: FontWeight.w700,
                   ),
@@ -1353,14 +1353,14 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                 Text(
                   title,
                   style: const TextStyle(
-                    fontSize: 11,
+                    fontSize: 13,
                     color: AppColors.textSecondary,
                   ),
                 ),
                 Text(
                   value,
                   style: const TextStyle(
-                    fontSize: 18,
+                    fontSize: 24,
                     fontWeight: FontWeight.bold,
                     color: AppColors.textPrimary,
                   ),
@@ -1368,7 +1368,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                 Text(
                   subtitle,
                   style: const TextStyle(
-                    fontSize: 10,
+                    fontSize: 13,
                     color: AppColors.textSecondary,
                   ),
                 ),
@@ -1393,7 +1393,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
       onTap: onTap,
       borderRadius: BorderRadius.circular(16),
       child: Container(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(16),
@@ -1420,7 +1420,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                   Text(
                     title,
                     style: const TextStyle(
-                      fontSize: 15,
+                      fontSize: 17,
                       fontWeight: FontWeight.bold,
                       color: AppColors.textPrimary,
                     ),
@@ -1429,7 +1429,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                   Text(
                     subtitle,
                     style: const TextStyle(
-                      fontSize: 11,
+                      fontSize: 13,
                       color: AppColors.textSecondary,
                     ),
                   ),
@@ -1529,7 +1529,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                           ? _activeTrip!.route
                           : 'Where Passengers Are Waiting',
                       style: const TextStyle(
-                        fontSize: 12,
+                        fontSize: 16,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -1550,7 +1550,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                         _locationError ??
                             'Your position and nearby waiting passengers',
                         style: TextStyle(
-                          fontSize: 10,
+                          fontSize: 12,
                           color: _locationError == null
                               ? AppColors.textSecondary
                               : AppColors.logoRed,
