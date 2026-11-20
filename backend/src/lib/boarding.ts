@@ -39,8 +39,8 @@ interface StoredReading {
 const FAILURE_MESSAGES: Record<string, string> = {
   TRIP_ENDED: "This jeepney's trip has ended.",
   JEEPNEY_FULL: 'This jeepney is full right now, so you could not be added.',
-  VERIFICATION_TIMEOUT: "We couldn't confirm you're on the jeepney. Make sure location is on and you're next to it, then try again.",
-  TOO_FAR: "Your location doesn't match the jeepney's. Move next to the jeepney and try again.",
+  VERIFICATION_TIMEOUT: 'Boarding verification timed out. You may retry.',
+  TOO_FAR: 'You are too far from the jeepney to confirm boarding.',
   DRIVER_LOCATION_STALE: "We can't see this jeepney's live location right now, so boarding can't be confirmed. Try again in a moment.",
   DRIVER_LOCATION_MISSING: "We can't see this jeepney's live location right now, so boarding can't be confirmed. Try again in a moment.",
   GPS_STALE: 'Your phone gave an old location. Wait a few seconds for a fresh GPS fix and try again.',
@@ -50,6 +50,19 @@ const FAILURE_MESSAGES: Record<string, string> = {
 
 export function boardingMessage(code: string | null): string {
   return (code && FAILURE_MESSAGES[code]) || "Boarding couldn't be confirmed. Please try again.";
+}
+
+/** One word the app can switch on: distinguishes a confirmation from a failed
+ * validation, a duplicate, a full jeepney and an expired request. */
+export type BoardingOutcome = 'PENDING' | 'CONFIRMED' | 'DUPLICATE' | 'FULL' | 'EXPIRED' | 'CANCELLED' | 'FAILED';
+
+export function boardingOutcome(req: BoardingRequest): BoardingOutcome {
+  if (req.status === 'PENDING') return 'PENDING';
+  if (req.status === 'CONFIRMED') return 'CONFIRMED';
+  if (req.status === 'CANCELLED') return 'CANCELLED';
+  if (req.failureCode === 'JEEPNEY_FULL') return 'FULL';
+  if (req.failureCode === 'VERIFICATION_TIMEOUT' || (req.resolvedAt && req.resolvedAt >= req.expiresAt)) return 'EXPIRED';
+  return 'FAILED';
 }
 
 export function toBoardingRequestView(req: BoardingRequest, settings?: Settings) {
@@ -65,6 +78,7 @@ export function toBoardingRequestView(req: BoardingRequest, settings?: Settings)
   return {
     requestId: req.id,
     status: req.status,
+    outcome: boardingOutcome(req),
     message,
     tripId: req.tripId,
     boardingId: req.boardingId,
@@ -191,7 +205,7 @@ export async function submitBoardingReading(requestId: string, commuterId: strin
       return { kind: 'ok' as const, request: done };
     }
 
-    const occupancy = await getOccupancy(tx, request.tripId);
+    const occupancy = await getOccupancy(tx, request.tripId, settings);
     if (lockedTrip.vehicleId) {
       if (!occupancy || occupancy.seatingCapacity === null) return { kind: 'fail' as const, code: 'CAPACITY_UNKNOWN' };
       if (occupancy.totalPassengers + request.riders > occupancy.seatingCapacity) {
@@ -216,6 +230,28 @@ export async function submitBoardingReading(requestId: string, commuterId: strin
     await failRequest(request.id, outcome.code);
   }
   return toBoardingRequestView((await prisma.boardingRequest.findUnique({ where: { id: request.id } }))!, settings);
+}
+
+/** Fails every PENDING request whose time is up, even if the commuter's app
+ * stopped sending readings (closed, crashed, lost signal). Cheap — indexed. */
+export async function expireStaleRequests(): Promise<number> {
+  const stale = await prisma.boardingRequest.findMany({
+    where: { status: 'PENDING', expiresAt: { lt: new Date() } },
+    select: { id: true, readings: true },
+    take: 500,
+  });
+  for (const req of stale) {
+    const readings = (Array.isArray(req.readings) ? req.readings : []) as unknown as StoredReading[];
+    await failRequest(req.id, lastFailureReason(readings));
+  }
+  return stale.length;
+}
+
+export function startBoardingExpiryJob() {
+  const timer = setInterval(() => {
+    expireStaleRequests().catch((err) => console.error('[boarding] expiry sweep failed', err));
+  }, 30_000);
+  timer.unref();
 }
 
 /** Expires a stale PENDING request on read, so a client polling status sees

@@ -1,7 +1,7 @@
 import type { Prisma } from '@prisma/client';
 
 import { prisma } from './prisma';
-import { getSettings } from './settings';
+import { getSettings, type Settings } from './settings';
 
 export type OccupancyStatus = 'NORMAL' | 'NEARLY_FULL' | 'FULL' | 'UNKNOWN';
 
@@ -42,7 +42,7 @@ export async function lockTrip(tx: Prisma.TransactionClient, tripId: string) {
  * can't drift from the boardings. Manual passengers are Trip.manualPassengers.
  * Call inside a transaction after [lockTrip] when the result gates a write.
  */
-export async function getOccupancy(tx: Tx, tripId: string): Promise<Occupancy | null> {
+export async function getOccupancy(tx: Tx, tripId: string, preloadedSettings?: Settings): Promise<Occupancy | null> {
   const trip = await tx.trip.findUnique({
     where: { id: tripId },
     select: { id: true, vehicleId: true, plateNumber: true, manualPassengers: true, vehicle: { select: { seatingCapacity: true, plateNumber: true } } },
@@ -55,7 +55,9 @@ export async function getOccupancy(tx: Tx, tripId: string): Promise<Occupancy | 
     WHERE "tripId" = ${tripId} AND "alightedAt" IS NULL AND "status" = 'BOARDED'`;
   const appPassengers = Number(rows[0]?.total ?? 0);
 
-  const { nearFullThresholdPercent } = await getSettings();
+  // Inside a transaction callers pass settings in, so this never asks the
+  // connection pool for a second connection while the transaction holds one.
+  const { nearFullThresholdPercent } = preloadedSettings ?? (await getSettings());
   const percent = nearFullThresholdPercent as number;
   const capacity = trip.vehicle?.seatingCapacity ?? null;
   const total = appPassengers + trip.manualPassengers;

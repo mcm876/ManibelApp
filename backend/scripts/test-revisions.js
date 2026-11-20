@@ -177,7 +177,7 @@ async function main() {
     check('GPS mismatch does not count the commuter', r.body?.status === 'PENDING' && (await occ()).appPassengers === 1, r.body);
     await prisma.boardingRequest.update({ where: { id: reqFar }, data: { expiresAt: new Date(Date.now() - 1000) } });
     r = await api('GET', `/api/commuter/board/requests/${reqFar}`, tc[1]);
-    check('unverified request fails with a clear message and is not counted', r.body?.status === 'FAILED' && /location/i.test(r.body?.message || ''), r.body);
+    check('unverified request fails with a clear message and is not counted', r.body?.status === 'FAILED' && /too far/i.test(r.body?.message || '') && r.body?.outcome === 'EXPIRED', r.body);
 
     // stale commuter GPS
     r = await api('POST', '/api/commuter/board', tc[2], { tripId: trip1.id, clientRequestId: 'c1', ...reading(NEAR, { fixAgeSeconds: 120 }) });
@@ -201,6 +201,43 @@ async function main() {
     await sleep(200);
     await api('PATCH', `/api/driver/trips/${trip1.id}/location`, t1, P);
     check('shared GPS movement after boarding never removes the passenger', (await occ()).appPassengers === 1);
+
+    console.log('\nBoarding hardening (rapid taps, expiry, resubmission)');
+    const pendingCount = (cid) => prisma.boardingRequest.count({ where: { commuterId: cid, status: 'PENDING' } });
+    const t2id = C[2].id;
+    const rapid = await Promise.all(
+      Array.from({ length: 6 }, () => api('POST', '/api/commuter/board', tc[2], { tripId: trip1.id, clientRequestId: 'rapid1', ...reading(FAR) })),
+    );
+    check('6 rapid taps with the same key share one request', new Set(rapid.map((x) => x.body?.requestId)).size === 1, rapid.map((x) => x.body?.requestId));
+    check('rapid taps never count anyone', (await occ()).appPassengers === 1);
+    const rapid2 = await Promise.all(
+      Array.from({ length: 6 }, (_, i) => api('POST', '/api/commuter/board', tc[2], { tripId: trip1.id, clientRequestId: `rapidB${i}`, ...reading(FAR) })),
+    );
+    check('rapid taps with different keys still leave at most one pending request', (await pendingCount(t2id)) <= 1, rapid2.map((x) => x.status));
+    check('responses carry a clear outcome field', rapid2.every((x) => ['PENDING', 'CONFIRMED'].includes(x.body?.outcome) || x.status >= 400), rapid2.map((x) => x.body?.outcome));
+    await prisma.boardingRequest.updateMany({ where: { commuterId: t2id, status: 'PENDING' }, data: { status: 'CANCELLED' } });
+
+    // a FAILED request can never be confirmed afterwards
+    for (let i = 0; i < 4; i++) r = await api('POST', `/api/commuter/board/requests/${reqFar}/readings`, tc[1], reading(NEAR));
+    check('an expired/failed request cannot be confirmed by later good readings', r.body?.status === 'FAILED' && (await occ()).appPassengers === 1, r.body);
+
+    // abandoned request: closed by the sweep even though the app never came back
+    r = await api('POST', '/api/commuter/board', tc[2], { tripId: trip1.id, clientRequestId: 'sweep1', ...reading(FAR) });
+    const sweepId = r.body?.requestId;
+    await prisma.boardingRequest.update({ where: { id: sweepId }, data: { expiresAt: new Date(Date.now() - 1000) } });
+    r = await api('POST', '/api/commuter/board', tc[2], { tripId: trip1.id, clientRequestId: 'sweep2', ...reading(FAR) });
+    const swept = await prisma.boardingRequest.findUnique({ where: { id: sweepId } });
+    check('an overdue pending request is closed (never resumed) when the commuter tries again', swept.status === 'FAILED' && r.body?.requestId !== sweepId, { status: swept.status });
+    check('...and the retry is a fresh PENDING request', r.body?.status === 'PENDING', r.body);
+    const gone = await api('GET', `/api/commuter/board/requests/${sweepId}`, tc[2]);
+    check('the abandoned request reports outcome EXPIRED', gone.body?.outcome === 'EXPIRED', gone.body);
+    await prisma.boardingRequest.updateMany({ where: { commuterId: t2id, status: 'PENDING' }, data: { status: 'CANCELLED' } });
+
+    r = await api('POST', '/api/commuter/board', tc[0], { tripId: trip1.id, clientRequestId: 'a1', ...reading(NEAR) });
+    check('re-sending a finished request is flagged duplicate and not recounted', r.body?.duplicate === true && (await occ()).appPassengers === 1, r.body);
+    r = await api('POST', '/api/commuter/board', tc[0], { tripId: trip1.id, clientRequestId: 'dupNew', ...reading(NEAR) });
+    check('boarding the same trip again while on board is DUPLICATE, count unchanged', r.body?.outcome === 'DUPLICATE' && (await occ()).appPassengers === 1, r.body);
+    check('no stray pending requests left behind', (await pendingCount(t2id)) === 0);
 
     console.log('\nManual passengers & occupancy');
     r = await api('POST', `/api/driver/trips/${trip1.id}/passengers`, t1, { delta: 1, clientRequestId: 'm1' });

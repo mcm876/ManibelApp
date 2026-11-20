@@ -31,7 +31,7 @@ import { getRoute } from '../lib/routingService';
 import { getSettings } from '../lib/settings';
 import { SHORT_TRIPPING_COMPLAINT_TYPE, openIncidentFromComplaint, resolveDriverForPlate } from '../lib/shortTrip';
 import { getOccupancy } from '../lib/occupancy';
-import { boardingMessage, expireIfDue, submitBoardingReading, toBoardingRequestView } from '../lib/boarding';
+import { boardingMessage, expireIfDue, expireStaleRequests, submitBoardingReading, toBoardingRequestView } from '../lib/boarding';
 import { estimateTrafficCondition } from '../lib/trafficEstimate';
 
 const router = Router();
@@ -1405,7 +1405,8 @@ router.post('/board', requireAuth('commuter'), async (req, res, next) => {
         sameKey.status === 'PENDING'
           ? await submitBoardingReading(sameKey.id, commuterId, reading)
           : toBoardingRequestView(sameKey, settings);
-      respond(view!);
+      // A finished request being re-sent is a duplicate, never a second count.
+      res.json({ ...view!, boarded: view!.status === 'CONFIRMED', duplicate: sameKey.status !== 'PENDING' });
       return;
     }
 
@@ -1417,6 +1418,8 @@ router.post('/board', requireAuth('commuter'), async (req, res, next) => {
       res.json({
         requestId: null,
         status: 'CONFIRMED',
+        outcome: 'DUPLICATE',
+        duplicate: true,
         boarded: true,
         message: "You're already on board this jeepney.",
         tripId: trip.id,
@@ -1427,6 +1430,8 @@ router.post('/board', requireAuth('commuter'), async (req, res, next) => {
 
     // Only one pending request per commuter: pressing Board again on the same
     // jeepney continues it; a request for a different jeepney replaces it.
+    // First close out anything overdue, so a stale request is never resumed.
+    await expireStaleRequests();
     const pending = await prisma.boardingRequest.findFirst({ where: { commuterId, status: 'PENDING' } });
     if (pending && pending.tripId === trip.id) {
       respond((await submitBoardingReading(pending.id, commuterId, reading))!);
@@ -1442,7 +1447,7 @@ router.post('/board', requireAuth('commuter'), async (req, res, next) => {
     // Fail fast when it's already full — the authoritative check still happens
     // again under lock at confirmation.
     if (trip.vehicleId) {
-      const occ = await getOccupancy(prisma, trip.id);
+      const occ = await getOccupancy(prisma, trip.id, settings);
       if (!occ || occ.seatingCapacity === null) {
         res.status(409).json({ error: boardingMessage('CAPACITY_UNKNOWN'), code: 'CAPACITY_UNKNOWN' });
         return;
@@ -1454,6 +1459,7 @@ router.post('/board', requireAuth('commuter'), async (req, res, next) => {
               ? boardingMessage('JEEPNEY_FULL')
               : `Only ${occ.remainingSeats} seat${occ.remainingSeats === 1 ? '' : 's'} left, but you're boarding with ${body.riders}.`,
           code: 'JEEPNEY_FULL',
+          outcome: 'FULL',
         });
         return;
       }

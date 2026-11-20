@@ -11,6 +11,7 @@ import { errorHandler } from './middleware/errorHandler';
 import { apiLimiter } from './middleware/rateLimit';
 import { startDriverLogReminderJobs } from './jobs/driverLogReminders';
 import { startKycPhotoRetentionJob } from './jobs/kycPhotoRetention';
+import { startBoardingExpiryJob } from './lib/boarding';
 
 const app = express();
 
@@ -76,3 +77,4 @@ app.listen(PORT, () => {
 
 startDriverLogReminderJobs();
 startKycPhotoRetentionJob();
+startBoardingExpiryJob();

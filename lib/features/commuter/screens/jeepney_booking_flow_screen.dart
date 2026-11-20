@@ -851,8 +851,21 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
   // resumes watching instead of pretending it worked — see _handleScanQr's
   // matching fix for why silently proceeding to "You're on Board!" here
   // was a real bug, not just a cosmetic one.
+  // True while a boarding attempt is open, so rapid taps on Board / Book This
+  // Jeepney can't start a second one on top of it.
+  bool _boardingInFlight = false;
+
   Future<void> _boardByTripId(_JeepneyOption jeepney) async {
-    if (jeepney.tripId == null) return;
+    if (jeepney.tripId == null || _boardingInFlight) return;
+    _boardingInFlight = true;
+    try {
+      await _boardByTripIdInner(jeepney);
+    } finally {
+      _boardingInFlight = false;
+    }
+  }
+
+  Future<void> _boardByTripIdInner(_JeepneyOption jeepney) async {
     setState(() => _selectedJeepney = jeepney);
 
     // Board only opens a request: the server confirms it from fresh GPS
@@ -883,7 +896,16 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
   // existing "You're on Board!" flow.
   Future<void> _handleScanQr() async {
     final jeepney = _selectedJeepney;
-    if (jeepney == null) return;
+    if (jeepney == null || _boardingInFlight) return;
+    _boardingInFlight = true;
+    try {
+      await _handleScanQrInner(jeepney);
+    } finally {
+      _boardingInFlight = false;
+    }
+  }
+
+  Future<void> _handleScanQrInner(_JeepneyOption jeepney) async {
 
     final rawValue = await Navigator.of(context).push<String>(
       MaterialPageRoute(builder: (_) => const QrScannerScreen()),
