@@ -1120,8 +1120,113 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
   /// (see the MarkerLayer in build()).
   LatLng? _boardedJeepneyPosition;
 
+  // This phone's own fresh GPS fix while on board, so the server can tell the
+  // commuter is really riding along (POST /api/commuter/board/presence). Only
+  // ever used to REMOVE someone who clearly isn't on the jeepney — a missing or
+  // weak fix is simply not sent and never costs the commuter their seat.
+  StreamSubscription<Position>? _presenceSub;
+  Position? _presenceFix;
+  bool _presenceVerified = false;
+  DateTime? _presenceFixAt;
+
+  DateTime? _lastPresenceSentAt;
+
+  void _startPresenceTracking() {
+    _presenceSub?.cancel();
+    _presenceVerified = false;
+    _presenceFix = null;
+    _presenceFixAt = null;
+    _lastPresenceSentAt = null;
+    ensureLocationAccess().then((access) {
+      if (access != LocationAccess.granted || !mounted || _step != _BookingStep.boardingStatus) return;
+      _listenForPresence(withForegroundService: true);
+    }).catchError((_) {});
+  }
+
+  /// Runs with an Android foreground service so readings keep flowing — and keep
+  /// being sent — when the commuter minimizes the app or locks the screen. If the
+  /// service can't start on a phone, falls back once to a plain stream.
+  void _listenForPresence({required bool withForegroundService}) {
+    _presenceSub?.cancel();
+    _presenceSub = livePositionStream(
+      distanceFilterMeters: 0,
+      foregroundNotification: withForegroundService
+          ? const ForegroundNotificationConfig(
+              notificationTitle: 'Ride in progress',
+              notificationText: 'ManibelApp is confirming you are on your jeepney.',
+              notificationChannelName: 'Ride verification',
+              setOngoing: true,
+            )
+          : null,
+    ).listen(
+      (p) {
+        _presenceFix = p;
+        _presenceFixAt = DateTime.now();
+        final last = _lastPresenceSentAt;
+        if (last == null || DateTime.now().difference(last) >= const Duration(seconds: 5)) {
+          _lastPresenceSentAt = DateTime.now();
+          unawaited(_sendPresence());
+        }
+      },
+      onError: (_) {
+        if (withForegroundService && mounted && _step == _BookingStep.boardingStatus) {
+          _listenForPresence(withForegroundService: false);
+        }
+      },
+    );
+  }
+
+  void _stopPresenceTracking() {
+    final sub = _presenceSub;
+    _presenceSub = null;
+    _presenceFix = null;
+    _presenceFixAt = null;
+    if (sub != null) unawaited(sub.cancel().timeout(const Duration(seconds: 2), onTimeout: () {}).catchError((_) {}));
+  }
+
+  /// Sends one presence reading; if the server says we were released (not on
+  /// the jeepney), leaves the on-board screen the same way Cancel Ride does.
+  Future<void> _sendPresence() async {
+    final fix = _presenceFix;
+    final at = _presenceFixAt;
+    if (_presenceVerified || fix == null || at == null) return;
+    try {
+      final r = await ApiClient.post(
+        '/api/commuter/board/presence',
+        {
+          'lat': fix.latitude,
+          'lng': fix.longitude,
+          'accuracy': fix.accuracy,
+          'fixAgeSeconds': DateTime.now().difference(at).inMilliseconds / 1000.0,
+        },
+        token: UserSession.instance.authToken,
+      );
+      if (!mounted || _step != _BookingStep.boardingStatus) return;
+      // Seen travelling with the jeepney: no more checks needed, and the GPS
+      // stream (battery) can stop.
+      if (r['verified'] == true) {
+        _presenceVerified = true;
+        _stopPresenceTracking();
+      }
+      if (r['status'] == 'RELEASED') {
+        _stopBoardingStatusPoll();
+        _recordTripInHistory(status: TripHistoryStatus.cancelled);
+        Navigator.of(context).popUntil((route) => route.isFirst);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("You weren't on the jeepney, so you're no longer counted as a passenger. Board again if you ride."),
+            duration: Duration(seconds: 6),
+          ),
+        );
+      }
+    } catch (_) {
+      // Best-effort — the next tick tries again.
+    }
+  }
+
   void _startBoardingStatusPoll() {
     _boardingStatusPollTimer?.cancel();
+    _startPresenceTracking();
     _pollActiveTrip(); // fire immediately — no reason to wait 5s for the
     // first position fix or end-trip check.
     _boardingStatusPollTimer = Timer.periodic(
@@ -1131,6 +1236,7 @@ class _JeepneyBookingFlowScreenState extends State<JeepneyBookingFlowScreen>
   }
 
   void _stopBoardingStatusPoll() {
+    _stopPresenceTracking();
     _boardingStatusPollTimer?.cancel();
     _boardingStatusPollTimer = null;
     _boardedJeepneyPosition = null;

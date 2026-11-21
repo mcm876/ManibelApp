@@ -4,6 +4,7 @@ import { prisma } from './prisma';
 import { bumpPeakOccupancy, getOccupancy, lockTrip } from './occupancy';
 import { getSettings, type Settings } from './settings';
 import { distanceMeters } from '../utils/geo';
+import { releaseUnverifiedBoardings } from './presence';
 
 /**
  * GPS-verified boarding. Pressing Board only creates a PENDING BoardingRequest;
@@ -189,7 +190,7 @@ export async function submitBoardingReading(requestId: string, commuterId: strin
     });
     if (claimed.count === 0) return { kind: 'already' as const };
 
-    const lockedTrip = await tx.trip.findUnique({ where: { id: request.tripId }, select: { status: true, vehicleId: true } });
+    const lockedTrip = await tx.trip.findUnique({ where: { id: request.tripId }, select: { status: true, vehicleId: true, currentLat: true, currentLng: true } });
     if (!lockedTrip || lockedTrip.status !== 'ACTIVE') return { kind: 'fail' as const, code: 'TRIP_ENDED' };
 
     // Never double-count a commuter that already has an open ride on this trip.
@@ -214,7 +215,17 @@ export async function submitBoardingReading(requestId: string, commuterId: strin
     }
 
     const boarding = await tx.tripBoarding.create({
-      data: { tripId: request.tripId, commuterId, riders: request.riders, requestId: request.id },
+      data: {
+        tripId: request.tripId,
+        commuterId,
+        riders: request.riders,
+        requestId: request.id,
+        // Baseline for movement matching (lib/presence.ts).
+        boardedLat: reading.lat,
+        boardedLng: reading.lng,
+        jeepLatAtBoard: lockedTrip.currentLat,
+        jeepLngAtBoard: lockedTrip.currentLng,
+      },
     });
     const done = await tx.boardingRequest.update({
       where: { id: request.id },
@@ -250,6 +261,7 @@ export async function expireStaleRequests(): Promise<number> {
 export function startBoardingExpiryJob() {
   const timer = setInterval(() => {
     expireStaleRequests().catch((err) => console.error('[boarding] expiry sweep failed', err));
+    releaseUnverifiedBoardings().catch((err) => console.error('[boarding] unverified sweep failed', err));
   }, 30_000);
   timer.unref();
 }

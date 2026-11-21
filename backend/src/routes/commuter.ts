@@ -32,6 +32,7 @@ import { getSettings } from '../lib/settings';
 import { SHORT_TRIPPING_COMPLAINT_TYPE, openIncidentFromComplaint, resolveDriverForPlate } from '../lib/shortTrip';
 import { getOccupancy } from '../lib/occupancy';
 import { boardingMessage, expireIfDue, expireStaleRequests, submitBoardingReading, toBoardingRequestView } from '../lib/boarding';
+import { submitPresenceReading } from '../lib/presence';
 import { estimateTrafficCondition } from '../lib/trafficEstimate';
 
 const router = Router();
@@ -1523,6 +1524,19 @@ router.get('/board/requests/:id', requireAuth('commuter'), async (req, res, next
     }
     const view = toBoardingRequestView(request, await getSettings());
     res.json({ ...view, boarded: view.status === 'CONFIRMED' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Presence check after boarding — the app sends a fresh reading every few
+// seconds while the "on board" screen is open. Positive evidence that the
+// commuter is nowhere near the jeepney releases them from the count (see
+// lib/presence.ts); silence never does.
+router.post('/board/presence', requireAuth('commuter'), async (req, res, next) => {
+  try {
+    const body = readingSchema.parse(req.body);
+    res.json(await submitPresenceReading(req.auth!.sub, body));
   } catch (err) {
     next(err);
   }

@@ -390,6 +390,26 @@ model TripBoarding {
   /// from before GPS-verified boarding existed.
   requestId String? @unique
 
+  /// Presence check after boarding (see lib/presence.ts): consecutive usable
+  /// readings showing the commuter FAR from the jeepney, and when that run
+  /// began. Reset by any reading close to the jeepney. Silence changes nothing.
+  /// Where the commuter's phone and the jeepney were when boarding was
+  /// confirmed — the baseline for movement matching — and when the two were
+  /// first seen travelling together (after which no more checks are needed).
+  boardedLat     Float?
+  boardedLng     Float?
+  jeepLatAtBoard Float?
+  jeepLngAtBoard Float?
+  ridingVerifiedAt DateTime?
+
+  awayReadings   Int       @default(0)
+  awaySince      DateTime?
+  lastPresenceAt DateTime?
+
+  /// Why the system (not the commuter) closed this boarding, e.g.
+  /// NOT_ON_BOARD. Null for rides the commuter or driver ended themselves.
+  releasedReason String?
+
   // No longer a plain @@unique([tripId, commuterId]) — that made it
   // impossible to log more than one ride per commuter per Trip. Instead,
   // a partial unique index (Prisma's schema DSL has no syntax for this —
